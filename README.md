@@ -18,17 +18,17 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 
 ## 🎨 Results
 
-### Comparison on Flux
+### Results on Flux
 
 <p align="center">
   <img src="assets/flux_res.png" alt="Flux Results" width="100%" style="background-color: white; padding: 10px;">
 </p>
 
 <p align="center">
-  <em>Qualitative comparison with existing methods on Flux. FreeFuse achieves superior identity preservation and compositional fidelity.</em>
+  <em>Qualitative results on Flux. FreeFuse achieves superior identity preservation and compositional fidelity.</em>
 </p>
 
-### Comparison on Other Methods
+### Results on SDXL
 
 <p align="center">
   <img src="assets/il_res.png" alt="IL Results" width="100%" style="background-color: white; padding: 10px;">
