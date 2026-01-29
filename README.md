@@ -1,7 +1,7 @@
 # FreeFuse: Multi-Subject LoRA Fusion via Adaptive Token-Level Routing at Test Time
 
 <p align="center">
-  <img src="assets/teaser.png" alt="Teaser" width="100%" style="background-color: white; padding: 10px;">
+  <img src="assets/teaser.png" alt="Teaser" width="100%">
 </p>
 
 <p align="center">
@@ -21,7 +21,7 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 ### Results on Flux
 
 <p align="center">
-  <img src="assets/flux_res.png" alt="Flux Results" width="100%" style="background-color: white; padding: 10px;">
+  <img src="assets/flux_res.png" alt="Flux Results" width="100%">
 </p>
 
 <p align="center">
@@ -31,7 +31,7 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 ### Results on SDXL
 
 <p align="center">
-  <img src="assets/il_res.png" alt="IL Results" width="100%" style="background-color: white; padding: 10px;">
+  <img src="assets/il_res.png" alt="IL Results" width="100%">
 </p>
 
 <p align="center">
@@ -41,7 +41,7 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 ## 🏗️ Architecture
 
 <p align="center">
-  <img src="assets/arch.png" alt="Architecture" width="100%" style="background-color: white; padding: 10px;">
+  <img src="assets/arch.png" alt="Architecture" width="100%">
 </p>
 
 <p align="center">
