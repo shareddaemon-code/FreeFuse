@@ -1,12 +1,12 @@
 flux2
-loras
+# loras
 diffusers
 peft
 debug*
 ConceptAttention
 c_loras
 
-/*.png
+# /*.png
 
 eval/results
 eval/models

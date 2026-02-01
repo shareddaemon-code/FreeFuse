@@ -8,9 +8,12 @@
   <em>FreeFuse enables seamless multi-subject composition by fusing multiple LoRAs without additional training or user-defined masks.</em>
 </p>
 
+[![arXiv](https://img.shields.io/badge/arXiv-2510.23515-b31b1b.svg)](https://arxiv.org/abs/2510.23515)
+
 ## 📌 TODO
 
-- [ ] Release inference code
+- [x] Release inference code
+- [ ] Supports ComfyUI
 
 ## 📖 Abstract
 
@@ -50,4 +53,36 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 
 ## 🚀 Quick Start
 
-*Code coming soon...*
+### Installation
+
+You just need clone this repo and use [uv](https://docs.astral.sh/uv/) to install dependencies.
+
+``` shell
+uv venv
+source .venv/bin/activate
+uv sync
+```
+
+### Running on Flux
+
+without background identification
+
+``` shell
+python main_freefuse_flux.py
+```
+
+with background identification and style LoRA
+
+``` shell
+python main_freefuse_flux_bg_except.py
+```
+
+*If you running out of your vram, you can set the quantization variable in the script to 'True' to enable quantization, which will reduce the vram usage.*
+
+### Running on SDXL
+
+``` python 
+python main_freefuse_sdxl.py
+```
+
+
