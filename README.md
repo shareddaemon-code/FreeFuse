@@ -101,7 +101,7 @@ python controlnet_freefuse_flux_bg_except.py
 
 ### Running on SDXL
 
-``` python 
+``` shell
 python main_freefuse_sdxl.py
 ```
 
