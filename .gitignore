@@ -5,6 +5,7 @@ peft
 debug*
 ConceptAttention
 c_loras
+ComfyUI
 
 # /*.png
 
