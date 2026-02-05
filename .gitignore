@@ -7,6 +7,9 @@ ConceptAttention
 c_loras
 ComfyUI
 
+*.tar.xz
+naiveproxy-v143.0.7499.109-2-linux-x64
+
 # /*.png
 
 eval/results
