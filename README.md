@@ -71,6 +71,8 @@ You just need clone this repo and use [uv](https://docs.astral.sh/uv/) to instal
 apt-get update && apt-get install -y git-lfs && git lfs install
 git clone https://github.com/yaoliliu/FreeFuse.git
 git lfs pull
+# or using huggingface if lfs budget is used up
+hf download lsmpp/freefuse_example_loras --local-dir=./loras
 
 uv venv
 source .venv/bin/activate
