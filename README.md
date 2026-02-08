@@ -129,7 +129,7 @@ python main_freefuse_sdxl.py
 python main_freefuse_z_image.py
 ```
 
-# Acknowledgement
+## Acknowledgement
 
 Thanks for [Tekemo](https://civarchive.com/users/Tekemo)'s ZIT LoRAs, which are used in our Z-Image-turbo examples.
 
