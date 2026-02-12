@@ -16,7 +16,9 @@
 - [x] Release inference code for controlnet, ipadapter and redux
 - [x] Supports ComfyUI
 - [x] Supports Z-Image-turbo in diffusers
-- [ ] Supports Z-Image-turbo in ComfyUI
+- [x] Supports Z-Image-turbo in ComfyUI
+- [ ] Supports FLUX.2-klein-4B/9B  in diffusers
+- [ ] Supports FLUX.2-klein-4B/9B in ComfyUI
 
 ## 📖 Abstract
 
@@ -57,6 +59,14 @@ This paper proposes **FreeFuse**, a training-free framework for multi-subject te
 ## 🚀 Quick Start
 
 ### Installation with ComfyUI
+
+<p align="center">
+  <img src="assets/compare_all.png" alt="Architecture" width="100%">
+</p>
+
+<p align="center">
+  <em>FreeFuse solves feature conflicts between multiple subject LoRAs without additional training in flux1.dev, sdxl, z-image and more.</em>
+</p>
 
 ```shell
 # use comfy-cli
