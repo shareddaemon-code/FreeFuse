@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Direct-run FreeFuse script for FLUX.2 klein.
+Direct-run FreeFuse script for FLUX.2 klein 9B.
 
 Edit the configuration section in `main()` and run:
-    python main_freefuse_flux2_klein.py
+    python main_freefuse_flux2_klein_9b.py
 """
 
 import os
+import string
 from typing import Dict, List, Optional, Tuple
 
 import torch
@@ -45,6 +46,149 @@ def resolve_default_klein_loras(model_path: str, lora_dir: str) -> Tuple[List[st
     lora_paths = [os.path.join(lora_dir, filename) for filename in lora_files]
     lora_names = [os.path.splitext(filename)[0] for filename in lora_files]
     return lora_paths, lora_names
+
+
+def find_concept_positions(
+    pipe: FreeFuseFlux2KleinPipeline,
+    prompt: str,
+    concept_map: Dict[str, str],
+    filter_meaningless: bool = True,
+    filter_single_char: bool = True,
+) -> Dict[str, List[List[int]]]:
+    """
+    Find token positions for each concept text by character-span overlap.
+
+    This is more robust than plain token-id subsequence matching for long
+    natural-language concept descriptions.
+    """
+    stopwords = {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "this",
+        "that",
+        "these",
+        "those",
+        "it",
+        "its",
+    }
+
+    def normalize_token_text(token_text: str) -> str:
+        return (
+            token_text.replace("▁", " ")
+            .replace("Ġ", " ")
+            .replace("_", " ")
+            .strip()
+            .lower()
+        )
+
+    def is_pure_punctuation(token_text: str) -> bool:
+        cleaned = normalize_token_text(token_text)
+        if not cleaned:
+            return True
+        return all(ch in string.punctuation for ch in cleaned)
+
+    def is_meaningless_token(token_text: str) -> bool:
+        cleaned = normalize_token_text(token_text)
+        if not cleaned:
+            return True
+        if filter_single_char and len(cleaned) == 1:
+            return True
+        if cleaned in stopwords:
+            return True
+        if is_pure_punctuation(token_text):
+            return True
+        return False
+
+    messages = [{"role": "user", "content": prompt}]
+    templated_text = pipe.tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+        enable_thinking=False,
+    )
+
+    prompt_inputs = pipe.tokenizer(
+        templated_text,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=pipe.tokenizer_max_length,
+        return_offsets_mapping=True,
+    )
+
+    prompt_ids = prompt_inputs.input_ids[0].tolist()
+    offset_mapping = prompt_inputs.offset_mapping[0].tolist()
+
+    concept_pos_map: Dict[str, List[List[int]]] = {}
+    for concept_name, concept_text in concept_map.items():
+        positions: List[int] = []
+        positions_with_text: List[Tuple[int, str]] = []
+
+        search_start = 0
+        while True:
+            char_start = templated_text.find(concept_text, search_start)
+            if char_start == -1:
+                break
+            char_end = char_start + len(concept_text)
+
+            for token_idx, (token_start, token_end) in enumerate(offset_mapping):
+                if token_end <= char_start or token_start >= char_end:
+                    continue
+                if token_idx in positions:
+                    continue
+                positions.append(token_idx)
+                token_text = pipe.tokenizer.decode(
+                    [prompt_ids[token_idx]],
+                    skip_special_tokens=False,
+                )
+                positions_with_text.append((token_idx, token_text))
+
+            search_start = char_start + 1
+
+        if filter_meaningless and positions_with_text:
+            filtered_positions = [
+                pos
+                for pos, token_text in positions_with_text
+                if not is_meaningless_token(token_text)
+            ]
+
+            if not filtered_positions:
+                non_punct_positions = [
+                    pos
+                    for pos, token_text in positions_with_text
+                    if not is_pure_punctuation(token_text)
+                ]
+                if non_punct_positions:
+                    filtered_positions = [non_punct_positions[0]]
+                else:
+                    filtered_positions = [positions_with_text[0][0]]
+
+            positions = filtered_positions
+
+        concept_pos_map[concept_name] = [positions]
+
+    return concept_pos_map
 
 
 def create_comparison_image(
@@ -89,19 +233,36 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Configuration
     # -------------------------------------------------------------------------
-    model_path = "black-forest-labs/FLUX.2-klein-4B"
+    model_path = "black-forest-labs/FLUX.2-klein-9B"
     torch_dtype = torch.bfloat16
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # If empty, klein LoRAs are auto-resolved from ./loras by model size.
-    lora_paths: List[str] = []
-    lora_names: List[str] = []
-    lora_weights: List[float] = []
+    lora_paths: List[str] = [
+        "loras/harry_klein_9b.safetensors",
+        "loras/shalnark_klein_9b.safetensors",
+    ]
+    lora_names: List[str] = ["harry_klein", "shalnark_klein"]
+    lora_weights: List[float] = [1.0, 1.0]
 
-    # Must align with `lora_names` to enable FreeFuse token tracking.
-    concept_tokens: List[str] = ["<sks1>", "<tok2>"]
+    concept_map: Dict[str, str] = {
+        "harry_klein": (
+            "harry potter, an European photorealistic style teenage wizard boy with "
+            "messy black hair, round wire-frame glasses, and bright green eyes, "
+            "wearing a white shirt, burgundy and gold striped tie, and dark robes"
+        ),
+        "shalnark_klein": (
+            "shalnark, an anime boy with blonde bob haircut and turquoise eyes, "
+            "wearing purple and teal futuristic uniform, determined expression, "
+            "digital anime art style"
+        ),
+    }
 
-    prompt = "A photo of <sks1> and <tok2> together"
+    t5_prompt = (
+        "A picture of two characters, a starry night scene with northern lights: "
+        + " and ".join(concept_map[lora_name] for lora_name in lora_names)
+    )
+    # FLUX.2 klein uses a single Qwen prompt path; use t5_prompt as actual prompt.
+    prompt = t5_prompt
     height = 1024
     width = 1024
     num_inference_steps = 4
@@ -115,9 +276,9 @@ def main() -> None:
     suppress_strength = -1e4
 
     compare = True
-    output_path = "freefuse_flux2_output.png"
+    output_path = "freefuse_flux2_klein_9b_output.png"
     save_sim_maps = False
-    debug_dir = "debug_output"
+    debug_dir = "debug_output_klein_9b"
 
     # -------------------------------------------------------------------------
     # Setup
@@ -145,8 +306,17 @@ def main() -> None:
         raise ValueError("`lora_paths` and `lora_names` must have the same length.")
     if len(lora_paths) != len(lora_weights):
         raise ValueError("`lora_paths` and `lora_weights` must have the same length.")
-    if concept_tokens and len(concept_tokens) != len(lora_names):
-        raise ValueError("`concept_tokens` and `lora_names` must have the same length.")
+    missing_concept_loras = [name for name in lora_names if name not in concept_map]
+    if missing_concept_loras:
+        raise ValueError(
+            "`concept_map` must contain all `lora_names`. Missing: "
+            + ", ".join(missing_concept_loras)
+        )
+    missing_loras = [path for path in lora_paths if not os.path.isfile(path)]
+    if missing_loras:
+        raise FileNotFoundError(
+            "Missing LoRA files:\n" + "\n".join(f"  - {path}" for path in missing_loras)
+        )
 
     print(f"Loading FLUX.2 klein pipeline from {model_path} ...")
     pipe = FreeFuseFlux2KleinPipeline.from_pretrained(model_path, torch_dtype=torch_dtype)
@@ -161,17 +331,21 @@ def main() -> None:
         pipe.set_adapters(lora_names, adapter_weights=lora_weights)
         pipe.convert_lora_layers(lora_names)
 
+    print(f"Qwen prompt: {prompt}")
     pipe.setup_freefuse_attention_processors()
 
     freefuse_token_pos_maps: Optional[Dict[str, List[List[int]]]] = None
     eos_idx: Optional[int] = None
-    if concept_tokens:
-        token_positions = pipe.find_concept_token_positions(prompt, concept_tokens)
-        freefuse_token_pos_maps = {}
-        for lora_name, concept_token in zip(lora_names, concept_tokens):
-            positions = token_positions.get(concept_token, [])
-            freefuse_token_pos_maps[lora_name] = [positions]
-            print(f"{lora_name} ({concept_token}) token positions: {positions}")
+    if concept_map:
+        freefuse_token_pos_maps = find_concept_positions(pipe, prompt, concept_map)
+        for lora_name in lora_names:
+            positions = freefuse_token_pos_maps.get(lora_name, [[]])[0]
+            print(f"{lora_name} token positions: {positions}")
+            if not positions:
+                print(
+                    f"Warning: no token positions found for concept `{lora_name}` "
+                    f"in prompt."
+                )
 
         eos_idx = pipe.find_eos_token_index(prompt)
         print(f"EOS token index: {eos_idx}")
@@ -290,7 +464,7 @@ def main() -> None:
             print("No sim maps captured. Falling back to phase-1 output.")
             output = output_phase1
     else:
-        print("\nNo concept tokens configured. Running standard generation.")
+        print("\nNo concept_map configured. Running standard generation.")
         output = pipe(
             prompt=prompt,
             height=height,

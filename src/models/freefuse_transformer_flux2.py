@@ -779,6 +779,7 @@ class Flux2Transformer2DModel(
         self.proj_out = nn.Linear(self.inner_dim, patch_size * patch_size * self.out_channels, bias=False)
 
         self.gradient_checkpointing = False
+        self._freefuse_txt_len = 0
 
     def forward(
         self,
@@ -952,9 +953,44 @@ class Flux2Transformer2DModel(
         Args:
             lora_masks: Dict mapping lora_name -> spatial mask tensor
         """
+        if lora_masks is None:
+            for _, module in self.named_modules():
+                if isinstance(module, FreeFuseLinear):
+                    module.set_freefuse_masks(None)
+            return
+
+        flat_img_masks = self._flatten_spatial_masks(lora_masks)
+        flat_seq_masks = self._prepend_text_to_masks(flat_img_masks, self._freefuse_txt_len)
+
         for name, module in self.named_modules():
-            if isinstance(module, FreeFuseLinear):
-                module.set_freefuse_masks(lora_masks)
+            if not isinstance(module, FreeFuseLinear):
+                continue
+
+            target_masks = None
+            if "single_transformer_blocks" in name:
+                # Single-stream blocks operate on concatenated [text, image] tokens.
+                if ("attn.to_qkv_mlp_proj" in name or "attn.to_out" in name) and flat_seq_masks is not None:
+                    target_masks = flat_seq_masks
+            elif "transformer_blocks" in name:
+                # Double-stream image path only. Exclude context/text-side projections.
+                is_img_stream = (
+                    (
+                        "attn.to_q" in name
+                        or "attn.to_k" in name
+                        or "attn.to_v" in name
+                        or "attn.to_out" in name
+                        or ".ff." in name
+                    )
+                    and "ff_context" not in name
+                    and "attn.add_q_proj" not in name
+                    and "attn.add_k_proj" not in name
+                    and "attn.add_v_proj" not in name
+                    and "attn.to_add_out" not in name
+                )
+                if is_img_stream:
+                    target_masks = flat_img_masks
+
+            module.set_freefuse_masks(target_masks)
 
     def set_freefuse_attention_bias(
         self,
@@ -979,11 +1015,20 @@ class Flux2Transformer2DModel(
         Args:
             txt_len: Number of text tokens
         """
+        self._freefuse_txt_len = int(max(0, txt_len))
         for name, module in self.named_modules():
             if hasattr(module, 'processor'):
                 processor = module.processor
                 if hasattr(processor, '_txt_len'):
-                    processor._txt_len = txt_len
+                    processor._txt_len = self._freefuse_txt_len
+
+    def set_freefuse_top_k_ratio(self, top_k_ratio: float) -> None:
+        """Set concept top-k ratio for all FreeFuse processors."""
+        for _, module in self.named_modules():
+            if hasattr(module, "processor"):
+                processor = module.processor
+                if hasattr(processor, "_top_k_ratio"):
+                    processor._top_k_ratio = float(top_k_ratio)
 
     def set_freefuse_background_info(
         self,
@@ -1007,15 +1052,72 @@ class Flux2Transformer2DModel(
 
     def clear_freefuse_state(self) -> None:
         """Clear all FreeFuse state from processors."""
-        for name, module in self.named_modules():
+        self._freefuse_txt_len = 0
+
+        for _, module in self.named_modules():
             if hasattr(module, 'processor'):
                 processor = module.processor
                 if hasattr(processor, '_freefuse_token_pos_maps'):
                     processor._freefuse_token_pos_maps = None
                 if hasattr(processor, '_attention_bias'):
                     processor._attention_bias = None
+                if hasattr(processor, '_txt_len'):
+                    processor._txt_len = 0
+                if hasattr(processor, '_eos_token_index'):
+                    processor._eos_token_index = None
+                if hasattr(processor, '_background_token_positions'):
+                    processor._background_token_positions = None
                 if hasattr(processor, 'concept_sim_maps'):
                     processor.concept_sim_maps = None
+
+            if isinstance(module, FreeFuseLinear):
+                module.set_freefuse_masks(None)
+                module.set_freefuse_token_pos_maps(None)
+                if hasattr(module, "enable_masks"):
+                    module.enable_masks()
+
+    @staticmethod
+    def _flatten_spatial_masks(lora_masks: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Convert masks to (B, seq_len, 1) format expected by FreeFuseLinear."""
+        flattened: Dict[str, torch.Tensor] = {}
+        for lora_name, mask in lora_masks.items():
+            if mask.dim() == 4:
+                if mask.shape[1] != 1:
+                    raise ValueError(
+                        f"Expected mask channel dim 1 for {lora_name}, got shape {tuple(mask.shape)}."
+                    )
+                flat = mask.reshape(mask.shape[0], -1, 1)
+            elif mask.dim() == 3:
+                if mask.shape[-1] == 1:
+                    flat = mask
+                else:
+                    flat = mask.reshape(mask.shape[0], -1, 1)
+            elif mask.dim() == 2:
+                flat = mask.unsqueeze(-1)
+            else:
+                raise ValueError(
+                    f"Unsupported mask shape for {lora_name}: {tuple(mask.shape)}."
+                )
+            flattened[lora_name] = flat
+        return flattened
+
+    @staticmethod
+    def _prepend_text_to_masks(
+        flat_masks: Dict[str, torch.Tensor], txt_len: int
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        """Build concatenated [text, image] masks for single-stream blocks."""
+        if txt_len <= 0:
+            return None
+
+        seq_masks: Dict[str, torch.Tensor] = {}
+        for lora_name, mask in flat_masks.items():
+            text_ones = torch.ones(
+                (mask.shape[0], txt_len, 1),
+                device=mask.device,
+                dtype=mask.dtype,
+            )
+            seq_masks[lora_name] = torch.cat([text_ones, mask], dim=1)
+        return seq_masks
 
     def get_concept_sim_maps(self) -> Optional[Dict[str, torch.Tensor]]:
         """
@@ -1057,4 +1159,3 @@ class Flux2Transformer2DModel(
                 if hasattr(processor, 'cal_concept_sim_map'):
                     processor.cal_concept_sim_map = True
                     break
-

@@ -213,6 +213,9 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
     ):
         super().__init__()
 
+        if not isinstance(transformer, FreeFuseFlux2Transformer2DModel):
+            transformer.__class__ = FreeFuseFlux2Transformer2DModel
+
         self.register_modules(
             vae=vae,
             text_encoder=text_encoder,
@@ -707,6 +710,29 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
                 return i
         return None
 
+    @staticmethod
+    def _infer_sim_map_hw(
+        img_len: int,
+        target_height: Optional[int] = None,
+        target_width: Optional[int] = None,
+    ) -> Tuple[int, int]:
+        """Infer 2D shape from flattened token length."""
+        if img_len <= 0:
+            raise ValueError(f"Invalid sim-map token length: {img_len}")
+
+        if (
+            target_height is not None
+            and target_width is not None
+            and img_len == target_height * target_width
+        ):
+            return target_height, target_width
+
+        h_lat = int(img_len**0.5)
+        while h_lat > 1 and img_len % h_lat != 0:
+            h_lat -= 1
+        w_lat = img_len // h_lat
+        return h_lat, w_lat
+
     def sim_maps_to_masks(
         self,
         sim_maps: Dict[str, torch.Tensor],
@@ -737,11 +763,10 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
                 continue
                 
             B, img_len, _ = sim_map.shape
-            h_lat = int((img_len ** 0.5))  # Assuming square for simplicity
-            w_lat = h_lat
+            h_lat, w_lat = self._infer_sim_map_hw(img_len, height, width)
             
             # Reshape to spatial
-            mask_2d = sim_map.view(B, 1, h_lat, w_lat)
+            mask_2d = sim_map.reshape(B, 1, h_lat, w_lat)
             
             # Resize if needed
             if h_lat != height or w_lat != width:
@@ -752,9 +777,8 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
         # Subtract background if available and requested
         if exclude_background and bg_mask is not None:
             B, img_len, _ = bg_mask.shape
-            h_lat = int((img_len ** 0.5))
-            w_lat = h_lat
-            bg_2d = bg_mask.view(B, 1, h_lat, w_lat)
+            h_lat, w_lat = self._infer_sim_map_hw(img_len, height, width)
+            bg_2d = bg_mask.reshape(B, 1, h_lat, w_lat)
             if h_lat != height or w_lat != width:
                 bg_2d = F.interpolate(bg_2d, size=(height, width), mode='bilinear', align_corners=False)
             
@@ -833,6 +857,9 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
 
     def setup_freefuse_attention_processors(self) -> None:
         """Replace attention processors with FreeFuse variants."""
+        if not isinstance(self.transformer, FreeFuseFlux2Transformer2DModel):
+            self.transformer.__class__ = FreeFuseFlux2Transformer2DModel
+
         for name, module in self.transformer.named_modules():
             if hasattr(module, 'processor'):
                 if 'single_transformer_blocks' in name:
@@ -845,6 +872,7 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
         convert_peft_lora_to_freefuse_lora(self.transformer, lora_names)
 
 
+    @torch.no_grad()
     @replace_example_docstring(EXAMPLE_DOC_STRING)
     def __call__(
         self,
@@ -978,6 +1006,9 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
             max_sequence_length=max_sequence_length,
             text_encoder_out_layers=text_encoder_out_layers,
         )
+
+        if hasattr(self.transformer, "set_freefuse_txt_len"):
+            self.transformer.set_freefuse_txt_len(prompt_embeds.shape[1])
 
         if self.do_classifier_free_guidance:
             negative_prompt = ""

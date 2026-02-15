@@ -92,7 +92,7 @@ class FreeFuseFlux2AttnProcessor:
         attention_mask: Optional[torch.Tensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
         freefuse_token_pos_maps: Optional[Dict[str, List[List[int]]]] = None,
-        top_k_ratio: float = 0.1,
+        top_k_ratio: Optional[float] = None,
         eos_token_index: Optional[int] = None,
         background_token_positions: Optional[List[int]] = None,
     ) -> torch.Tensor:
@@ -107,7 +107,7 @@ class FreeFuseFlux2AttnProcessor:
         """
         # Use passed params or fall back to stored ones
         freefuse_token_pos_maps = freefuse_token_pos_maps or self._freefuse_token_pos_maps
-        top_k_ratio = top_k_ratio if freefuse_token_pos_maps else self._top_k_ratio
+        top_k_ratio = self._top_k_ratio if top_k_ratio is None else top_k_ratio
         eos_token_index = eos_token_index if eos_token_index is not None else self._eos_token_index
         background_token_positions = background_token_positions or self._background_token_positions
         
@@ -171,19 +171,19 @@ class FreeFuseFlux2AttnProcessor:
                 encoder_key_rope = txt_img_key[:, :txt_len, :, :]
                 img_query_rope = txt_img_query[:, txt_len:, :, :]
                 
-                concept_sim_maps = self._extract_concept_sim_maps(
+                self.concept_sim_maps = self._extract_concept_sim_maps(
                     img_query_rope, encoder_key_rope, hidden_states_out,
                     freefuse_token_pos_maps, top_k_ratio,
                     eos_token_index, background_token_positions,
                 )
-                self.concept_sim_maps = concept_sim_maps
 
             # Output projections
             hidden_states_out = attn.to_out[0](hidden_states_out)
             hidden_states_out = attn.to_out[1](hidden_states_out)
             encoder_hidden_states_out = attn.to_add_out(encoder_hidden_states_out)
 
-            return hidden_states_out, encoder_hidden_states_out, {}, concept_sim_maps
+            # Must match Flux2TransformerBlock expectations.
+            return hidden_states_out, encoder_hidden_states_out
         else:
             return attention_output
 
@@ -355,7 +355,7 @@ class FreeFuseFlux2SingleAttnProcessor:
         image_rotary_emb: Optional[torch.Tensor] = None,
         freefuse_token_pos_maps: Optional[Dict[str, List[List[int]]]] = None,
         txt_len: int = 0,
-        top_k_ratio: float = 0.1,
+        top_k_ratio: Optional[float] = None,
         eos_token_index: Optional[int] = None,
         background_token_positions: Optional[List[int]] = None,
     ) -> torch.Tensor:
@@ -367,7 +367,7 @@ class FreeFuseFlux2SingleAttnProcessor:
         # Use passed params or fall back to stored ones
         freefuse_token_pos_maps = freefuse_token_pos_maps or self._freefuse_token_pos_maps
         txt_len = txt_len if txt_len > 0 else self._txt_len
-        top_k_ratio = top_k_ratio if freefuse_token_pos_maps else self._top_k_ratio
+        top_k_ratio = self._top_k_ratio if top_k_ratio is None else top_k_ratio
         eos_token_index = eos_token_index if eos_token_index is not None else self._eos_token_index
         background_token_positions = background_token_positions or self._background_token_positions
 
