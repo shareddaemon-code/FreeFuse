@@ -267,17 +267,24 @@ def main() -> None:
     width = 1024
     num_inference_steps = 4
     guidance_scale = 1.0
-    seed = 42
+    seed = 0
 
-    sim_map_extraction_step = 4
-    sim_map_extraction_block: Optional[str] = None  # e.g. "transformer_blocks.4"
+    sim_map_extraction_step = 2
+    sim_map_extraction_block: Optional[str] = "single_transformer_blocks.3"  # e.g. "transformer_blocks.4"
     top_k_ratio = 0.1
     exclude_background = True
-    suppress_strength = -1e4
+    use_balanced_argmax = True
+    balanced_argmax_debug = False
+    # Attention bias settings (aligned with flux.dev style)
+    attention_bias_scale = 1.0
+    attention_bias_positive = True
+    attention_bias_positive_scale = 1.0
+    attention_bias_bidirectional = True
 
     compare = True
     output_path = "freefuse_flux2_klein_9b_output.png"
     save_sim_maps = False
+    debug_save_path: Optional[str] = None  # e.g. "debug_output_klein_9b"
     debug_dir = "debug_output_klein_9b"
 
     # -------------------------------------------------------------------------
@@ -321,7 +328,8 @@ def main() -> None:
     print(f"Loading FLUX.2 klein pipeline from {model_path} ...")
     pipe = FreeFuseFlux2KleinPipeline.from_pretrained(model_path, torch_dtype=torch_dtype)
     pipe.transformer.__class__ = FreeFuseFlux2Transformer2DModel
-    pipe.to(device)
+    # pipe.to(device)
+    pipe.enable_model_cpu_offload()
 
     if lora_paths:
         print(f"Loading {len(lora_paths)} LoRA adapters ...")
@@ -333,6 +341,8 @@ def main() -> None:
 
     print(f"Qwen prompt: {prompt}")
     pipe.setup_freefuse_attention_processors()
+    if debug_save_path is not None:
+        print(f"Debug visualizations will be saved to {debug_save_path}")
 
     freefuse_token_pos_maps: Optional[Dict[str, List[List[int]]]] = None
     eos_idx: Optional[int] = None
@@ -427,10 +437,14 @@ def main() -> None:
                 height=lat_height,
                 width=lat_width,
                 exclude_background=exclude_background,
+                debug_save_path=debug_save_path,
+                debug_step_idx=sim_map_extraction_step,
+                use_balanced_argmax=use_balanced_argmax,
+                balanced_argmax_debug=balanced_argmax_debug,
             )
 
             if save_sim_maps:
-                save_masks_for_debug(lora_masks, debug_dir)
+                save_masks_for_debug(lora_masks, debug_save_path or debug_dir)
 
             txt_len = pipe.tokenizer_max_length
             img_len = lat_height * lat_width
@@ -439,7 +453,12 @@ def main() -> None:
                 freefuse_token_pos_maps,
                 txt_len=txt_len,
                 img_len=img_len,
-                suppress_strength=suppress_strength,
+                suppress_strength=-attention_bias_scale,
+                debug_save_path=debug_save_path,
+                debug_step_idx=sim_map_extraction_step,
+                positive_bias_scale=attention_bias_positive_scale,
+                bidirectional=attention_bias_bidirectional,
+                use_positive_bias=attention_bias_positive,
             )
 
             pipe.transformer.set_freefuse_masks(lora_masks)

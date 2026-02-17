@@ -23,6 +23,7 @@ This pipeline extends Flux2KleinPipeline with FreeFuse capabilities:
 """
 
 import inspect
+import os
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -733,6 +734,272 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
         w_lat = img_len // h_lat
         return h_lat, w_lat
 
+    def _to_debug_2d_map(
+        self,
+        tensor: torch.Tensor,
+        target_height: Optional[int] = None,
+        target_width: Optional[int] = None,
+    ) -> np.ndarray:
+        """
+        Convert a map-like tensor into a 2D numpy array for debug visualization.
+
+        Supported shapes:
+        - (B, 1, H, W)
+        - (B, N, 1)
+        - (B, N)
+        """
+        if tensor is None:
+            raise ValueError("Expected a tensor, got None.")
+
+        if tensor.dim() == 4:
+            map_2d = tensor[0, 0]
+        elif tensor.dim() == 3:
+            if tensor.shape[-1] == 1:
+                flat = tensor[0, :, 0]
+            elif tensor.shape[1] == 1:
+                flat = tensor[0, 0, :]
+            else:
+                raise ValueError(f"Unsupported 3D tensor shape: {tuple(tensor.shape)}")
+            h_lat, w_lat = self._infer_sim_map_hw(flat.shape[0], target_height, target_width)
+            map_2d = flat.reshape(h_lat, w_lat)
+        elif tensor.dim() == 2:
+            if tensor.shape[0] <= 4:
+                flat = tensor[0]
+                h_lat, w_lat = self._infer_sim_map_hw(flat.shape[0], target_height, target_width)
+                map_2d = flat.reshape(h_lat, w_lat)
+            else:
+                map_2d = tensor
+        else:
+            raise ValueError(f"Unsupported tensor shape for debug map: {tuple(tensor.shape)}")
+
+        return map_2d.detach().cpu().float().numpy()
+
+    def _save_debug_visualizations(
+        self,
+        debug_save_path: str,
+        step_idx: int = 0,
+        sim_maps: Optional[Dict[str, torch.Tensor]] = None,
+        lora_masks: Optional[Dict[str, torch.Tensor]] = None,
+        attention_bias: Optional[torch.Tensor] = None,
+        attention_bias_vmax: Optional[float] = None,
+    ) -> None:
+        """Save FreeFuse intermediate maps/masks/attention-bias visualizations."""
+        if debug_save_path is None:
+            return
+
+        try:
+            import matplotlib.pyplot as plt
+        except Exception as exc:
+            logger.warning(
+                "`debug_save_path` is set but matplotlib is unavailable (%s). Skip debug visualizations.",
+                exc,
+            )
+            return
+
+        os.makedirs(debug_save_path, exist_ok=True)
+
+        target_height = None
+        target_width = None
+        if lora_masks:
+            first_mask = next(iter(lora_masks.values()))
+            if first_mask.dim() == 4:
+                target_height, target_width = first_mask.shape[-2], first_mask.shape[-1]
+
+        if sim_maps:
+            for concept_name, sim_map in sim_maps.items():
+                try:
+                    sim_map_2d = self._to_debug_2d_map(sim_map, target_height=target_height, target_width=target_width)
+                except ValueError as err:
+                    logger.warning("Skip sim-map debug for `%s`: %s", concept_name, err)
+                    continue
+
+                fig, ax = plt.subplots(figsize=(8, 8))
+                im = ax.imshow(sim_map_2d, cmap="viridis")
+                ax.set_title(f"Concept Sim Map: {concept_name} (step {step_idx})")
+                plt.colorbar(im, ax=ax)
+                plt.savefig(
+                    os.path.join(debug_save_path, f"concept_sim_map_{concept_name}_step{step_idx}.png"),
+                    dpi=150,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
+
+        if lora_masks:
+            for lora_name, mask in lora_masks.items():
+                try:
+                    mask_2d = self._to_debug_2d_map(mask)
+                except ValueError as err:
+                    logger.warning("Skip LoRA-mask debug for `%s`: %s", lora_name, err)
+                    continue
+
+                fig, ax = plt.subplots(figsize=(8, 8))
+                im = ax.imshow(mask_2d, cmap="gray", vmin=0.0, vmax=1.0)
+                ax.set_title(f"LoRA Mask: {lora_name} (step {step_idx})")
+                plt.colorbar(im, ax=ax)
+                plt.savefig(
+                    os.path.join(debug_save_path, f"lora_mask_{lora_name}_step{step_idx}.png"),
+                    dpi=150,
+                    bbox_inches="tight",
+                )
+                plt.close(fig)
+
+        if attention_bias is not None:
+            bias_2d = attention_bias[0].detach().cpu().float().numpy()
+            if attention_bias_vmax is None:
+                vmax = float(np.max(np.abs(bias_2d)))
+                attention_bias_vmax = max(vmax, 1.0)
+            else:
+                attention_bias_vmax = max(abs(float(attention_bias_vmax)), 1.0)
+
+            fig, ax = plt.subplots(figsize=(12, 12))
+            im = ax.imshow(
+                bias_2d,
+                cmap="RdBu",
+                vmin=-attention_bias_vmax,
+                vmax=attention_bias_vmax,
+            )
+            ax.set_title(f"Attention Bias Matrix (step {step_idx})")
+            ax.set_xlabel("Key positions (text | image)")
+            ax.set_ylabel("Query positions (text | image)")
+            plt.colorbar(im, ax=ax)
+            plt.savefig(
+                os.path.join(debug_save_path, f"attention_bias_step{step_idx}.png"),
+                dpi=150,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+    def stabilized_balanced_argmax(
+        self,
+        logits: torch.Tensor,
+        h: int,
+        w: int,
+        target_count: Optional[float] = None,
+        max_iter: int = 15,
+        lr: float = 0.01,
+        gravity_weight: float = 0.000004,
+        spatial_weight: float = 0.000004,
+        momentum: float = 0.2,
+        centroid_margin: float = 0.0,
+        border_penalty: float = 0.0,
+        anisotropy: float = 1.1,
+        debug: bool = False,
+    ) -> torch.Tensor:
+        """
+        Balanced argmax with iterative spatial/centroid regularization.
+
+        This is transplanted from the flux.dev implementation to stabilize concept
+        partitioning compared with plain argmax.
+        """
+        B, C, N = logits.shape
+        device = logits.device
+
+        max_dim = max(h, w)
+        scale_h = 1.0
+        scale_w = 1.0
+
+        y_range = torch.linspace(-scale_h, scale_h, steps=h, device=device)
+        x_range = torch.linspace(-scale_w, scale_w, steps=w, device=device)
+        x_range = x_range * anisotropy
+
+        grid_y, grid_x = torch.meshgrid(y_range, x_range, indexing="ij")
+        flat_y = grid_y.reshape(1, 1, N)
+        flat_x = grid_x.reshape(1, 1, N)
+
+        pixel_size = 2.0 / max_dim
+        is_border = (flat_y.abs() > (scale_h - pixel_size * 1.5)) | (
+            flat_x.abs() > (scale_w - pixel_size * 1.5)
+        )
+        border_mask = is_border.float()
+
+        if target_count is None:
+            target_count = N / C
+
+        bias = torch.zeros(B, C, 1, device=device)
+
+        def linear_normalize(x: torch.Tensor, dim: int = 1) -> torch.Tensor:
+            x_min = x.min(dim=dim, keepdim=True)[0]
+            x_max = x.max(dim=dim, keepdim=True)[0]
+            return (x - x_min) / (x_max - x_min + 1e-8)
+
+        running_probs = linear_normalize(logits, dim=1)
+
+        logit_range = (logits.max() - logits.min()).item()
+        logit_scale = max(logit_range, 1e-4)
+        effective_lr = lr * logit_scale
+        max_bias = logit_scale * 10.0
+
+        if debug:
+            print(f"\n[ArgmaxV4 Debug] Start. B={B}, C={C}, N={N}, Target={target_count:.1f}")
+            print(f"Logits range: min={logits.min().item():.5f}, max={logits.max().item():.5f}")
+            print(f"Logit scale: {logit_scale:.6f}, Effective LR: {effective_lr:.6f}")
+
+        neighbor_kernel = torch.ones(C, 1, 3, 3, device=device, dtype=logits.dtype) / 8.0
+        neighbor_kernel[:, :, 1, 1] = 0
+
+        current_logits = logits.clone()
+
+        for i in range(max_iter):
+            probs = linear_normalize(current_logits - bias, dim=1)
+
+            running_probs = (1 - momentum) * probs + momentum * running_probs
+
+            mass = running_probs.sum(dim=2, keepdim=True) + 1e-6
+            center_y = (running_probs * flat_y).sum(dim=2, keepdim=True) / mass
+            center_x = (running_probs * flat_x).sum(dim=2, keepdim=True) / mass
+
+            if centroid_margin > 0:
+                limit_y = scale_h * (1.0 - centroid_margin)
+                limit_x = scale_w * (1.0 - centroid_margin)
+                center_y = torch.clamp(center_y, -limit_y, limit_y)
+                center_x = torch.clamp(center_x, -limit_x, limit_x)
+
+            dist_sq = (flat_y - center_y) ** 2 + (flat_x - center_x) ** 2
+
+            hard_indices = torch.argmax(current_logits - bias, dim=1)
+            hard_counts = F.one_hot(hard_indices, num_classes=C).float().sum(dim=1)
+
+            diff = hard_counts - target_count
+            cur_lr = effective_lr * (0.95**i)
+            bias += torch.sign(diff).unsqueeze(2) * cur_lr
+            bias = torch.clamp(bias, -max_bias, max_bias)
+
+            if spatial_weight > 0:
+                probs_img = running_probs.view(B, C, h, w)
+                probs_img_f32 = probs_img.float()
+                kernel_f32 = neighbor_kernel.float()
+                neighbor_votes = F.conv2d(probs_img_f32, kernel_f32, padding=1, groups=C)
+                neighbor_votes = neighbor_votes.to(logits.dtype).view(B, C, N)
+            else:
+                neighbor_votes = torch.zeros_like(logits)
+
+            gravity_term = dist_sq * gravity_weight
+            border_term = border_mask * border_penalty
+
+            current_logits = (
+                logits
+                - bias
+                + (neighbor_votes * spatial_weight)
+                - gravity_term
+                - border_term
+            )
+
+            if debug and (i == 0 or i == max_iter - 1 or i % 10 == 0):
+                hard_counts_list = hard_counts[0].int().tolist()
+                print(f"Iter {i:02d}: Counts={hard_counts_list}")
+                print(f"  Bias range: {bias.min().item():.5f} ~ {bias.max().item():.5f}")
+                print(
+                    f"  Gravity Mean: {gravity_term.mean().item():.3f}, Max: {gravity_term.max().item():.3f}"
+                )
+                print(f"  Spatial Mean: {(neighbor_votes * spatial_weight).mean().item():.3f}")
+
+        if debug:
+            final_assignment = torch.argmax(current_logits, dim=1)[0]
+            final_counts = final_assignment.bincount(minlength=C).tolist()
+            print(f"[Argmax Debug] Final Counts: {final_counts}\n")
+
+        return torch.argmax(current_logits, dim=1)
+
     def sim_maps_to_masks(
         self,
         sim_maps: Dict[str, torch.Tensor],
@@ -740,6 +1007,14 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
         width: int,
         exclude_background: bool = True,
         normalize: bool = True,
+        debug_save_path: Optional[str] = None,
+        debug_step_idx: int = 0,
+        eos_bg_scale: float = 0.95,
+        use_morphological_clean: bool = True,
+        opening_kernel_size: int = 2,
+        closing_kernel_size: int = 2,
+        use_balanced_argmax: bool = True,
+        balanced_argmax_debug: bool = False,
     ) -> Dict[str, torch.Tensor]:
         """
         Convert similarity maps to spatial masks.
@@ -750,49 +1025,121 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
             width: Target width (in latent space)
             exclude_background: If True, set background mask to 0 for all concepts
             normalize: If True, normalize masks to sum to 1 at each position
+            debug_save_path: If set, save sim-map/mask debug visualizations to this folder
+            debug_step_idx: Step index used in debug output file names
+            eos_bg_scale: Scale applied to bg/eos channel before bg-vs-fg argmax
+            use_morphological_clean: Whether to apply opening+closing for fg/bg mask cleanup
+            opening_kernel_size: Kernel size for foreground opening
+            closing_kernel_size: Kernel size for foreground closing
+            use_balanced_argmax: If True, use stabilized_balanced_argmax for concept assignment
+            balanced_argmax_debug: Enable debug logs in stabilized_balanced_argmax
             
         Returns:
             Dict of lora_name -> (B, 1, H, W) spatial mask tensors
         """
-        masks = {}
-        bg_mask = None
-        
-        for lora_name, sim_map in sim_maps.items():
-            if lora_name in ['__bg__', '__eos__']:
-                bg_mask = sim_map
-                continue
-                
-            B, img_len, _ = sim_map.shape
-            h_lat, w_lat = self._infer_sim_map_hw(img_len, height, width)
-            
-            # Reshape to spatial
-            mask_2d = sim_map.reshape(B, 1, h_lat, w_lat)
-            
-            # Resize if needed
+        if len(sim_maps) == 0:
+            return {}
+
+        def _squeeze_sim_map(x: torch.Tensor, name: str) -> torch.Tensor:
+            # normalize to shape (B, N)
+            if x.dim() == 4 and x.shape[1] == 1:
+                return x[:, 0].reshape(x.shape[0], -1)
+            if x.dim() == 3:
+                if x.shape[-1] == 1:
+                    return x[:, :, 0]
+                if x.shape[1] == 1:
+                    return x[:, 0, :]
+            if x.dim() == 2:
+                return x
+            raise ValueError(f"Unsupported sim-map shape for `{name}`: {tuple(x.shape)}")
+
+        # Avoid mutating caller data
+        local_maps = dict(sim_maps)
+        bg_sim_map = local_maps.pop("__bg__", None)
+        eos_sim_map = local_maps.pop("__eos__", None)
+        if bg_sim_map is None:
+            bg_sim_map = eos_sim_map
+
+        concept_items = list(local_maps.items())
+        if len(concept_items) == 0:
+            return {}
+
+        concept_names = [name for name, _ in concept_items]
+        concept_tensor = torch.stack(
+            [_squeeze_sim_map(sim_map, name) for name, sim_map in concept_items],
+            dim=1,
+        )  # (B, C, N)
+
+        B, C, img_len = concept_tensor.shape
+        h_lat, w_lat = self._infer_sim_map_hw(img_len, height, width)
+
+        # Foreground mask via bg-vs-concept argmax (reference: direct_extract pipeline)
+        if exclude_background:
+            if bg_sim_map is not None:
+                bg_channel = _squeeze_sim_map(bg_sim_map, "__bg__") * eos_bg_scale  # (B, N)
+            else:
+                # fallback when no explicit bg/eos token map exists
+                bg_channel = concept_tensor.mean(dim=1)
+
+            sim_with_bg = torch.cat([concept_tensor, bg_channel.unsqueeze(1)], dim=1)  # (B, C+1, N)
+            raw_not_background_mask = (sim_with_bg.argmax(dim=1) != C).float()  # (B, N)
+        else:
+            raw_not_background_mask = torch.ones((B, img_len), device=concept_tensor.device, dtype=concept_tensor.dtype)
+
+        if use_morphological_clean:
+            cleaned_not_background = self.morphological_clean_mask(
+                raw_not_background_mask,
+                h=h_lat,
+                w=w_lat,
+                opening_kernel_size=opening_kernel_size,
+                closing_kernel_size=closing_kernel_size,
+            )
+            not_background_mask = cleaned_not_background > 0.5
+        else:
+            not_background_mask = raw_not_background_mask > 0.5
+
+        # Hard assignment to concept channels (01 mask)
+        if use_balanced_argmax:
+            max_indices = self.stabilized_balanced_argmax(
+                concept_tensor,
+                h_lat,
+                w_lat,
+                debug=balanced_argmax_debug,
+            )
+        else:
+            max_indices = torch.argmax(concept_tensor, dim=1)  # (B, N)
+
+        masks: Dict[str, torch.Tensor] = {}
+        for idx, lora_name in enumerate(concept_names):
+            hard_mask_flat = ((max_indices == idx) & not_background_mask).float()  # (B, N), binary
+            hard_mask_2d = hard_mask_flat.reshape(B, 1, h_lat, w_lat)
+
             if h_lat != height or w_lat != width:
-                mask_2d = F.interpolate(mask_2d, size=(height, width), mode='bilinear', align_corners=False)
-            
-            masks[lora_name] = mask_2d
-        
-        # Subtract background if available and requested
-        if exclude_background and bg_mask is not None:
-            B, img_len, _ = bg_mask.shape
-            h_lat, w_lat = self._infer_sim_map_hw(img_len, height, width)
-            bg_2d = bg_mask.reshape(B, 1, h_lat, w_lat)
-            if h_lat != height or w_lat != width:
-                bg_2d = F.interpolate(bg_2d, size=(height, width), mode='bilinear', align_corners=False)
-            
-            for lora_name in masks:
-                masks[lora_name] = torch.clamp(masks[lora_name] - bg_2d, min=0.0)
-        
-        # Normalize so that masks sum to 1 at each position
+                # nearest keeps the mask binary
+                hard_mask_2d = F.interpolate(hard_mask_2d, size=(height, width), mode="nearest")
+            masks[lora_name] = hard_mask_2d
+
+        # Keep normalization option for compatibility. For hard one-hot masks this stays binary.
         if normalize and len(masks) > 0:
             all_masks = torch.stack(list(masks.values()), dim=0)  # (num_concepts, B, 1, H, W)
             mask_sum = all_masks.sum(dim=0, keepdim=True).clamp(min=1e-6)
             all_masks = all_masks / mask_sum
-            
+
             for i, lora_name in enumerate(masks.keys()):
                 masks[lora_name] = all_masks[i]
+
+        if debug_save_path is not None:
+            self._save_debug_visualizations(
+                debug_save_path=debug_save_path,
+                step_idx=debug_step_idx,
+                sim_maps=sim_maps,
+                lora_masks=masks,
+            )
+            logger.info(
+                "[FreeFuse Debug] Saved sim-map/mask debug outputs to `%s` (step %d).",
+                debug_save_path,
+                debug_step_idx,
+            )
         
         return masks
 
@@ -803,6 +1150,11 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
         txt_len: int,
         img_len: int,
         suppress_strength: float = -1e4,
+        debug_save_path: Optional[str] = None,
+        debug_step_idx: int = 0,
+        positive_bias_scale: float = 1.0,
+        bidirectional: bool = True,
+        use_positive_bias: bool = True,
     ) -> torch.Tensor:
         """
         Build additive attention bias for cross-LoRA suppression.
@@ -816,44 +1168,152 @@ class FreeFuseFlux2KleinPipeline(DiffusionPipeline, Flux2LoraLoaderMixin):
             txt_len: Text sequence length
             img_len: Image sequence length
             suppress_strength: Negative bias to apply for suppression
+            debug_save_path: If set, save attention-bias debug visualization to this folder
+            debug_step_idx: Step index used in debug output file names
+            positive_bias_scale: Positive bias for same-LoRA image/text pairs
+            bidirectional: If True, also apply text->image bias
+            use_positive_bias: If True, add positive same-LoRA bias terms
             
         Returns:
             (B, txt_len+img_len, txt_len+img_len) additive attention bias
         """
         if len(lora_masks) == 0:
             return None
-            
-        B = list(lora_masks.values())[0].shape[0]
-        device = list(lora_masks.values())[0].device
-        dtype = list(lora_masks.values())[0].dtype
-        
+
+        first_mask = next(iter(lora_masks.values()))
+        B = first_mask.shape[0]
+        device = first_mask.device
+        dtype = first_mask.dtype
+
         total_len = txt_len + img_len
         bias = torch.zeros((B, total_len, total_len), device=device, dtype=dtype)
-        
-        # Flatten masks to (B, img_len)
-        flat_masks = {}
-        for lora_name, mask in lora_masks.items():
-            flat_masks[lora_name] = mask.view(B, -1)  # (B, H*W)
-        
+
+        lora_names = list(lora_masks.keys())
+        lora_name_to_idx = {name: idx for idx, name in enumerate(lora_names)}
+
+        # Map each text token to concept idx; -1 means shared/unmapped token
+        text_token_to_lora = torch.full((txt_len,), -1, device=device, dtype=torch.long)
         for lora_name, positions_list in freefuse_token_pos_maps.items():
-            if lora_name not in flat_masks:
+            if lora_name not in lora_name_to_idx:
                 continue
-                
-            mask = flat_masks[lora_name]  # (B, img_len)
-            inverted_mask = 1.0 - mask  # Regions NOT belonging to this concept
-            
-            for batch_idx in range(B):
-                positions = positions_list[0] if len(positions_list) > 0 else []
-                for pos in positions:
-                    if pos < txt_len:
-                        # For each image position, if it doesn't belong to this concept,
-                        # suppress its attention to this concept's text tokens
-                        for img_idx in range(img_len):
-                            if inverted_mask[batch_idx, img_idx] > 0.5:
-                                # Image position img_idx should not attend to text position pos
-                                bias[batch_idx, txt_len + img_idx, pos] = suppress_strength
+
+            lora_idx = lora_name_to_idx[lora_name]
+            positions = positions_list[0] if len(positions_list) > 0 else []
+            for pos in positions:
+                if 0 <= pos < txt_len:
+                    text_token_to_lora[pos] = lora_idx
+
+        neg_scale = abs(float(suppress_strength))
+
+        # Flatten/reshape masks to (B, img_len)
+        flat_masks: Dict[str, torch.Tensor] = {}
+        for lora_name, mask in lora_masks.items():
+            if mask.dim() == 4:
+                flat_mask = mask.reshape(B, -1)
+            elif mask.dim() == 3:
+                if mask.shape[-1] == 1:
+                    flat_mask = mask[:, :, 0]
+                elif mask.shape[1] == 1:
+                    flat_mask = mask[:, 0, :]
+                else:
+                    flat_mask = mask.reshape(B, -1)
+            elif mask.dim() == 2:
+                flat_mask = mask
+            else:
+                raise ValueError(f"Unsupported mask shape for `{lora_name}`: {tuple(mask.shape)}")
+
+            if flat_mask.shape[1] != img_len:
+                if flat_mask.shape[1] > img_len:
+                    flat_mask = flat_mask[:, :img_len]
+                else:
+                    flat_mask = F.pad(flat_mask, (0, img_len - flat_mask.shape[1]), value=0.0)
+
+            flat_masks[lora_name] = flat_mask.to(device=device, dtype=dtype)
+
+        for lora_name, img_mask in flat_masks.items():
+            lora_idx = lora_name_to_idx[lora_name]
+
+            other_lora_text_mask = (text_token_to_lora != lora_idx) & (text_token_to_lora != -1)
+            other_lora_text_mask = other_lora_text_mask.to(dtype=dtype)  # (txt_len,)
+
+            img_to_txt_bias = img_mask.unsqueeze(-1) * other_lora_text_mask.unsqueeze(0).unsqueeze(0)
+            bias[:, txt_len:, :txt_len] += img_to_txt_bias * (-neg_scale)
+
+            this_lora_text_mask = (text_token_to_lora == lora_idx).to(dtype=dtype)  # (txt_len,)
+            if use_positive_bias:
+                img_to_txt_positive = img_mask.unsqueeze(-1) * this_lora_text_mask.unsqueeze(0).unsqueeze(0)
+                bias[:, txt_len:, :txt_len] += img_to_txt_positive * float(positive_bias_scale)
+
+            if bidirectional:
+                not_this_lora_img_mask = 1.0 - img_mask
+                txt_to_img_bias = this_lora_text_mask.unsqueeze(0).unsqueeze(-1) * not_this_lora_img_mask.unsqueeze(1)
+                bias[:, :txt_len, txt_len:] += txt_to_img_bias * (-neg_scale)
+
+                if use_positive_bias:
+                    txt_to_img_positive = this_lora_text_mask.unsqueeze(0).unsqueeze(-1) * img_mask.unsqueeze(1)
+                    bias[:, :txt_len, txt_len:] += txt_to_img_positive * float(positive_bias_scale)
+
+        if debug_save_path is not None:
+            self._save_debug_visualizations(
+                debug_save_path=debug_save_path,
+                step_idx=debug_step_idx,
+                attention_bias=bias,
+                attention_bias_vmax=abs(float(suppress_strength)),
+            )
+            logger.info(
+                "[FreeFuse Debug] Saved attention-bias debug output to `%s` (step %d).",
+                debug_save_path,
+                debug_step_idx,
+            )
         
         return bias
+
+    def morphological_clean_mask(
+        self,
+        mask: torch.Tensor,
+        h: int,
+        w: int,
+        opening_kernel_size: int = 3,
+        closing_kernel_size: int = 3,
+    ) -> torch.Tensor:
+        """
+        Clean binary fg/bg mask using opening then closing.
+
+        Input shape: (B, N) where N = h * w
+        Output shape: (B, N)
+        """
+        if mask.dim() != 2:
+            raise ValueError(f"`mask` must be 2D (B, N), got {tuple(mask.shape)}")
+        if mask.shape[1] != h * w:
+            raise ValueError(f"`mask` length mismatch: got N={mask.shape[1]}, expected {h*w} from h={h}, w={w}")
+
+        mask_2d = mask.view(mask.shape[0], 1, h, w)
+
+        def dilate(x: torch.Tensor, kernel_size: int) -> torch.Tensor:
+            padding = kernel_size // 2
+            out = F.max_pool2d(x, kernel_size=kernel_size, stride=1, padding=padding)
+            if out.shape[-2:] != x.shape[-2:]:
+                out = F.interpolate(out, size=x.shape[-2:], mode="nearest")
+            return out
+
+        def erode(x: torch.Tensor, kernel_size: int) -> torch.Tensor:
+            padding = kernel_size // 2
+            out = 1.0 - F.max_pool2d(1.0 - x, kernel_size=kernel_size, stride=1, padding=padding)
+            if out.shape[-2:] != x.shape[-2:]:
+                out = F.interpolate(out, size=x.shape[-2:], mode="nearest")
+            return out
+
+        if opening_kernel_size > 1:
+            opened = dilate(erode(mask_2d, opening_kernel_size), opening_kernel_size)
+        else:
+            opened = mask_2d
+
+        if closing_kernel_size > 1:
+            closed = erode(dilate(opened, closing_kernel_size), closing_kernel_size)
+        else:
+            closed = opened
+
+        return closed.view(mask.shape[0], -1)
 
     def setup_freefuse_attention_processors(self) -> None:
         """Replace attention processors with FreeFuse variants."""

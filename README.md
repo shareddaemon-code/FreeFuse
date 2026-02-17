@@ -17,7 +17,7 @@
 - [x] Supports ComfyUI
 - [x] Supports Z-Image-turbo in diffusers
 - [x] Supports Z-Image-turbo in ComfyUI
-- [ ] Supports FLUX.2-klein-4B/9B  in diffusers
+- [x] Supports FLUX.2-klein-4B/9B  in diffusers
 - [ ] Supports FLUX.2-klein-4B/9B in ComfyUI
 
 ## 📖 Abstract
