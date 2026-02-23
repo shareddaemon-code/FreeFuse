@@ -1729,14 +1729,16 @@ def apply_freefuse_replace_patches(
     Args:
         model: ComfyUI ModelPatcher object
         state: FreeFuse state
-        model_type: "flux", "flux2", "sdxl", "z_image", or "auto"
+        model_type: "flux", "flux2", "sdxl", "z_image", "hidream_i1", or "auto"
         sdxl_collect_blocks: Optional list of (block_name, block_num, tf_index)
                             tuples for SDXL. If None, uses default.
     """
     # Auto-detect model type
     if model_type == "auto":
         model_name = model.model.__class__.__name__.lower()
-        if "nextdit" in model_name or "lumina" in model_name:
+        if "hidream" in model_name:
+            model_type = "hidream_i1"
+        elif "nextdit" in model_name or "lumina" in model_name:
             model_type = "z_image"
         elif "flux2" in model_name:
             model_type = "flux2"
@@ -1747,7 +1749,7 @@ def apply_freefuse_replace_patches(
     
     logging.info(f"[FreeFuse] Applying AGGRESSIVE replace patches for {model_type} model")
     
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         # Z-Image uses NextDiT (Lumina) architecture with layers array
         # We use the AGGRESSIVE QKV-based approach: pre-hook + double_block patch
         diffusion_model = model.model.diffusion_model
