@@ -1059,6 +1059,12 @@ def load_zimage_models():
     return model, clip, vae, "z_image"
 
 
+def load_hidream_i1_models():
+    """Load HiDream i1 models via Z-Image-compatible path."""
+    model, clip, vae, _ = load_zimage_models()
+    return model, clip, vae, "hidream_i1"
+
+
 def load_loras(model, clip, model_type: str):
     """Load LoRAs in bypass mode."""
     print("\n[Loading LoRAs]")
@@ -1067,7 +1073,7 @@ def load_loras(model, clip, model_type: str):
     
     lora_list = folder_paths.get_filename_list("loras")
     
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         # Z-Image uses Jinx + Skeletor LoRAs (aligned with main_freefuse_z_image.py)
         lora_a = next((l for l in lora_list if "jinx" in l.lower() and "zit" in l.lower()), None)
         lora_b = next((l for l in lora_list if "skeletor" in l.lower() and "zit" in l.lower()), None)
@@ -1127,7 +1133,7 @@ def load_loras(model, clip, model_type: str):
 def setup_concepts_and_conditioning(clip, freefuse_data, model_type: str):
     """Set up concept map and conditioning."""
     
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         # Z-Image uses Jinx + Skeletor (aligned with main_freefuse_z_image.py)
         prompt = ("A picture of two characters, a starry night scene with northern lights in background: "
                   "The first character is Jinx_Arcane, a young woman with long blue hair in a loose braid "
@@ -1242,7 +1248,7 @@ def setup_concepts_and_conditioning(clip, freefuse_data, model_type: str):
         encoder = CLIPTextEncodeFlux()
         conditioning, = encoder.encode(clip, prompt, prompt, 3.5)
         neg_conditioning, = encoder.encode(clip, "", "", 3.5)
-    elif model_type == "z_image":
+    elif model_type in ("z_image", "hidream_i1"):
         # Z-Image uses Lumina2 text encoding
         # Replicate CLIPTextEncodeLumina2 logic: prepend system prompt, then tokenize
         system_prompt = ("You are an assistant designed to generate superior images with the superior "
@@ -1331,7 +1337,7 @@ def run_single_test(
             # Flux2/Klein: 4 steps, cfg=1.0, Flux2 mu-shift schedule (custom sigmas)
             # SDXL: 30 steps, cfg=7.0, collect_step=10
             p1_sigmas = None
-            if model_type == "z_image":
+            if model_type in ("z_image", "hidream_i1"):
                 p1_steps, p1_collect, p1_cfg = 12, 3, 1.0
                 p1_scheduler = "simple"
             elif model_type in ("klein4b", "klein9b"):
@@ -1405,7 +1411,7 @@ def run_single_test(
         
         # Use matching parameters for Phase 2
         p2_sigmas = None
-        if model_type == "z_image":
+        if model_type in ("z_image", "hidream_i1"):
             p2_steps, p2_cfg, p2_scheduler = 12, 1.0, "simple"  # cfg=1.0 = no CFG (cond-only)
         elif model_type in ("klein4b", "klein9b"):
             p2_steps, p2_cfg, p2_scheduler = 4, 1.0, "simple"
@@ -1496,7 +1502,7 @@ def run_test_suite(model_type: str, test_categories: List[str] = None):
         model, clip, vae, mt = load_flux2_klein_models("4b")
     elif model_type == "klein9b":
         model, clip, vae, mt = load_flux2_klein_models("9b")
-    elif model_type == "z_image":
+    elif model_type in ("z_image", "hidream_i1"):
         model, clip, vae, mt = load_zimage_models()
     else:
         model, clip, vae, mt = load_sdxl_models()
@@ -1510,7 +1516,7 @@ def run_test_suite(model_type: str, test_categories: List[str] = None):
     )
     
     # Select test categories - use Z-Image specific configs when model_type is z_image
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         all_tests = {
             "aspect": ZIMAGE_ASPECT_RATIO_TESTS,
             "block": ZIMAGE_BLOCK_TESTS,
@@ -1609,6 +1615,7 @@ def main():
     parser.add_argument("--klein9b", action="store_true", help="Run Flux2.Klein 9B tests")
     parser.add_argument("--sdxl", action="store_true", help="Run SDXL tests")
     parser.add_argument("--zimage", action="store_true", help="Run Z-Image-Turbo tests")
+    parser.add_argument("--hidream", action="store_true", help="Run HiDream i1 tests")
     parser.add_argument("--all", action="store_true", help="Run all tests")
     parser.add_argument("--category", type=str, nargs="+", 
                        choices=["aspect", "block", "simmap", "mask", "lora", "bias"],
@@ -1619,7 +1626,7 @@ def main():
     args = parser.parse_args()
     
     # Default to all if nothing specified
-    if not args.flux and not args.klein4b and not args.klein9b and not args.sdxl and not args.zimage and not args.all:
+    if not args.flux and not args.klein4b and not args.klein9b and not args.sdxl and not args.zimage and not args.hidream and not args.all:
         args.all = True
     
     categories = args.category
@@ -1667,6 +1674,14 @@ def main():
             print(f"Z-Image tests failed: {e}")
             import traceback
             traceback.print_exc()
+
+    if args.hidream or args.all:
+        try:
+            results["hidream_i1"] = run_test_suite("hidream_i1", categories)
+        except Exception as e:
+            print(f"HiDream i1 tests failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Final summary
     print(f"\n{'#'*70}")
@@ -1683,3 +1698,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

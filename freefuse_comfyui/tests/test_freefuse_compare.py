@@ -60,7 +60,7 @@ import comfy.sample
 import comfy.model_management
 
 
-MODEL_ORDER = ["flux", "z_image", "klein9b", "klein4b", "sdxl"]
+MODEL_ORDER = ["flux", "klein4b", "klein9b", "sdxl", "z_image", "hidream_i1"]
 
 KLEIN_NO_THINK_TEMPLATE = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
 KLEIN_GUIDANCE = None
@@ -103,6 +103,24 @@ MODEL_DEFAULTS = {
         "bias_blocks": "all",
         "bidirectional": True,
         "use_morphological_cleaning": True,
+    },
+    "hidream_i1": {
+        "steps": 12,
+        "cfg": 1.0,
+        "seed": 42,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "collect_step": 3,
+        "collect_block": 21,
+        "collect_region": "output_early ★ (recommended)",
+        "collect_tf_index": 3,
+        "top_k_ratio": 0.1,
+        "temperature": 0.0,
+        "bias_scale": 3.0,
+        "positive_bias_scale": 1.0,
+        "bias_blocks": "last_half",
+        "bidirectional": True,
+        "use_morphological_cleaning": False,
     },
     "klein4b": {
         "steps": 4,
@@ -456,9 +474,15 @@ def load_sdxl_models():
     return model, clip, vae
 
 
+def load_hidream_i1_models():
+    """Load HiDream i1 models via Z-Image-compatible path."""
+    model, clip, vae = load_zimage_models()
+    return model, clip, vae
+
+
 def _find_loras_for_model(model_type: str) -> Tuple[str, str, str, str, float]:
     lora_list = folder_paths.get_filename_list("loras")
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         lora_a = next((l for l in lora_list if "jinx" in l.lower() and "zit" in l.lower()), None)
         lora_b = next((l for l in lora_list if "skeletor" in l.lower() and "zit" in l.lower()), None)
         adapter_a, adapter_b = "jinx", "skeleton"
@@ -507,7 +531,7 @@ def load_loras(model, clip, lora_a, lora_b, adapter_a, adapter_b, strength):
 
 
 def _default_prompt_config(model_type: str) -> Tuple[str, str, Dict[str, str], str, str, str]:
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         prompt = (
             "A picture of two characters, a starry night scene with northern lights in background: "
             "The first character is Jinx_Arcane, a young woman with long blue hair in a loose braid "
@@ -818,6 +842,8 @@ def run_model_compare(model_type: str, width: int, height: int, out_dir: str) ->
         flux_variant = "flux2"
     elif model_type == "z_image":
         model, clip, vae = load_zimage_models()
+    elif model_type == "hidream_i1":
+        model, clip, vae = load_hidream_i1_models()
         flux_variant = None
     else:
         model, clip, vae = load_sdxl_models()
@@ -984,7 +1010,7 @@ def main():
     parser.add_argument(
         "--models",
         default="all",
-        help="Comma-separated: flux,klein4b,klein9b,z_image,sdxl or 'all'",
+        help="Comma-separated: flux,klein4b,klein9b,sdxl,z_image,hidream_i1 or 'all'",
     )
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)

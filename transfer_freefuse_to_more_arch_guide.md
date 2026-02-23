@@ -873,3 +873,14 @@ A robust order is:
 Once these three are done, your new architecture support is maintainable and production-ready, not just experimental.
 
 If you add a new architecture, please append your finalized router defaults to this guide so future contributors can move faster.
+
+
+## HiDream i1 finalized router defaults
+- collect_block: `layers.21`
+- collect_step: `3`
+- top_k_ratio: `0.1`
+- bias_scale: `3.0`
+- positive_bias_scale: `1.0`
+- bidirectional: `true`
+- attention_bias_blocks: `last_half`
+- use_morphological_cleaning: `false`
