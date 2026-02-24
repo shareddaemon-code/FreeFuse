@@ -1729,14 +1729,16 @@ def apply_freefuse_replace_patches(
     Args:
         model: ComfyUI ModelPatcher object
         state: FreeFuse state
-        model_type: "flux", "flux2", "sdxl", "z_image", or "auto"
+        model_type: "flux", "flux2", "sdxl", "z_image", "hidream_i1", or "auto"
         sdxl_collect_blocks: Optional list of (block_name, block_num, tf_index)
                             tuples for SDXL. If None, uses default.
     """
     # Auto-detect model type
     if model_type == "auto":
         model_name = model.model.__class__.__name__.lower()
-        if "nextdit" in model_name or "lumina" in model_name:
+        if "hidream" in model_name:
+            model_type = "hidream_i1"
+        elif "nextdit" in model_name or "lumina" in model_name:
             model_type = "z_image"
         elif "flux2" in model_name:
             model_type = "flux2"
@@ -1747,24 +1749,23 @@ def apply_freefuse_replace_patches(
     
     logging.info(f"[FreeFuse] Applying AGGRESSIVE replace patches for {model_type} model")
     
-    if model_type == "z_image":
-        # Z-Image uses NextDiT (Lumina) architecture with layers array
-        # We use the AGGRESSIVE QKV-based approach: pre-hook + double_block patch
+    if model_type in ("z_image", "hidream_i1"):
         diffusion_model = model.model.diffusion_model
-        
+
         block_index = state.collect_block
         if hasattr(diffusion_model, 'layers') and len(diffusion_model.layers) > block_index:
             block = diffusion_model.layers[block_index]
-            
-            # Create replacer with QKV extraction and register both
-            # the pre-hook and the double_block patch
             replacer = FreeFuseZImageBlockReplace(state, block=block, block_index=block_index)
             replacer.install(model)
-            
-            logging.info(f"[FreeFuse] Set QKV-based block replace for Z-Image layer {block_index}")
+            logging.info(f"[FreeFuse] Set QKV-based block replace for Z-Image-compatible layer {block_index}")
             logging.info(f"[FreeFuse] Block type: {type(block).__name__}")
         else:
-            logging.error(f"[FreeFuse] Cannot find layers[{block_index}] in Z-Image diffusion model")
+            model_name = diffusion_model.__class__.__name__
+            logging.error(
+                "[FreeFuse] HiDream/Z-Image patch route expects diffusion_model.layers; "
+                f"got {model_name}. Please use the Z-Image/Lumina-style ComfyUI model "
+                "path or extend FreeFuse with a HiDream-native block replace adapter."
+            )
     
     elif model_type == "flux":
         # Get the actual diffusion model
