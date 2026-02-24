@@ -459,13 +459,25 @@ for Phase 2 generation with the same seed and steps."""
                 anisotropy=anisotropy,
             )
         else:
-            # Fallback: create uniform masks
-            print("[FreeFuse] Warning: No similarity maps, using uniform masks")
-            masks = {}
-            for name in concepts.keys():
-                masks[name] = torch.ones(latent_h, latent_w, device=latent_image.device)
-            if include_background:
-                masks["_background_"] = torch.zeros(latent_h, latent_w, device=latent_image.device)
+            # Fallback: hidream-specific spatial partition to avoid complete concept merge
+            # when similarity-map hooks are unavailable in certain ComfyUI HiDream builds.
+            if model_type == "hidream_i1" and len(concepts) > 1:
+                print("[FreeFuse] Warning: No similarity maps for HiDream; using deterministic spatial partition masks")
+                masks = self._build_partition_fallback_masks(
+                    concept_names=list(concepts.keys()),
+                    latent_h=latent_h,
+                    latent_w=latent_w,
+                    device=latent_image.device,
+                    include_background=include_background,
+                )
+            else:
+                # Generic fallback: uniform masks
+                print("[FreeFuse] Warning: No similarity maps, using uniform masks")
+                masks = {}
+                for name in concepts.keys():
+                    masks[name] = torch.ones(latent_h, latent_w, device=latent_image.device)
+                if include_background:
+                    masks["_background_"] = torch.zeros(latent_h, latent_w, device=latent_image.device)
 
         # Optional debug dump for masks
         if os.environ.get("FREEFUSE_DEBUG_ZIMAGE") == "1" and patch_model_type == "z_image":
@@ -612,6 +624,37 @@ for Phase 2 generation with the same seed and steps."""
         print(f"[FreeFuse] Processed {len(result)} similarity maps to spatial format")
         return result
     
+    @staticmethod
+    def _build_partition_fallback_masks(
+        concept_names,
+        latent_h: int,
+        latent_w: int,
+        device,
+        include_background: bool = True,
+    ):
+        """Deterministic stripe masks used when HiDream sim maps are unavailable.
+
+        This is a safety fallback only; it prevents full-ones masks that cause total
+        subject merging, while still allowing users to generate separated subjects.
+        """
+        n = max(1, len(concept_names))
+        masks = {}
+        # Partition image into equal-width vertical stripes per concept.
+        for idx, name in enumerate(concept_names):
+            start = (idx * latent_w) // n
+            end = ((idx + 1) * latent_w) // n
+            m = torch.zeros(latent_h, latent_w, device=device)
+            m[:, start:end] = 1.0
+            masks[name] = m
+
+        if include_background:
+            occ = torch.zeros(latent_h, latent_w, device=device)
+            for m in masks.values():
+                occ = torch.maximum(occ, m)
+            masks["_background_"] = 1.0 - occ
+
+        return masks
+
     def _create_preview(self, masks, width, height):
         """Create color-coded mask preview."""
         colors = [

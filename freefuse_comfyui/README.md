@@ -111,6 +111,7 @@ If your output looks like pure noise/static, check these exact points:
    Keep the UNET path direct: `UNETLoader -> FreeFuseLoRALoader ...`.
 3. For negative conditioning with `CLIPTextEncodeHiDream`, keep all 4 text fields empty (`""`) unless you intentionally want a structured negative prompt.
 4. Keep `cfg=1.0` and scheduler/sampler matching phase1+phase2 (`euler` + `simple` is a safe baseline).
+5. If HiDream hooks fail to produce similarity maps, FreeFuse now applies a deterministic stripe-partition fallback mask instead of full-ones masks to reduce subject merging.
 
 Minimal HiDream chain:
 `QuadrupleCLIPLoader -> CLIPTextEncodeHiDream (pos/neg) -> FreeFusePhase1Sampler -> FreeFuseMaskApplicator -> KSampler -> VAEDecode`.
