@@ -252,7 +252,7 @@ for Phase 2 generation with the same seed and steps."""
             model_type = "sdxl"
 
         # Internal patch route aliases.
-        if model_type == "qwen3":
+        if model_type in ("qwen3", "hidream_i1"):
             patch_model_type = "z_image"
         else:
             patch_model_type = model_type
