@@ -282,6 +282,20 @@ def _resolve_qwen3_tokenizer(tokenizer):
     return None
 
 
+def _resolve_hidream_tokenizer(tokenizer):
+    """Resolve tokenizer branch for HiDream multi-encoder CLIP wrappers.
+
+    HiDream tokenizers can expose multiple branches (clip_l/clip_g/t5xxl/llama).
+    We anchor concept position matching on CLIP-L first for stable phrase lookup.
+    """
+    for key in ("clip_l", "l"):
+        if hasattr(tokenizer, key):
+            resolved = _extract_nested_tokenizer(getattr(tokenizer, key))
+            if resolved is not None:
+                return resolved
+    return None
+
+
 def get_tokenizer_for_model(clip, model_type: str = None):
     """
     Get the appropriate tokenizer object from CLIP.
@@ -302,7 +316,12 @@ def get_tokenizer_for_model(clip, model_type: str = None):
     if tokenizer is None:
         raise ValueError("Could not find clip.tokenizer on CLIP object.")
 
-    if model_type in ("z_image", "hidream_i1", "flux2", "qwen3"):
+    if model_type == "hidream_i1":
+        resolved = _resolve_hidream_tokenizer(tokenizer)
+        if resolved is not None:
+            return resolved
+
+    if model_type in ("z_image", "flux2", "qwen3"):
         resolved = _resolve_qwen3_tokenizer(tokenizer)
         if resolved is not None:
             return resolved
@@ -840,7 +859,7 @@ def find_concept_positions(
     
     tokenizer = get_tokenizer_for_model(clip, model_type)
     
-    if model_type in ('z_image', 'flux2', 'qwen3'):
+    if model_type in ('z_image', 'hidream_i1', 'flux2', 'qwen3'):
         qwen_template = KLEIN_NO_THINK_TEMPLATE if model_type == "flux2" else None
         return find_concept_positions_qwen3(
             clip, tokenizer, prompts, concepts,
@@ -864,7 +883,7 @@ def find_concept_positions(
     else:
         raise ValueError(
             f"Unsupported model type: {model_type}. "
-            "Use 'flux', 'flux2', 'sdxl', 'z_image', 'qwen3', or 'sd1'."
+            "Use 'flux', 'flux2', 'sdxl', 'z_image', 'hidream_i1', 'qwen3', or 'sd1'."
         )
 
 
@@ -930,7 +949,7 @@ def find_eos_position_qwen3(
     else:
         model_type = _normalize_model_type(model_type) or model_type
 
-    if model_type not in {"flux2", "qwen3"}:
+    if model_type not in {"flux2", "qwen3", "hidream_i1"}:
         return -1
 
     tokenizer = get_tokenizer_for_model(clip, model_type)

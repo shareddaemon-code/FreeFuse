@@ -29,19 +29,43 @@ from typing import Optional, Dict, Any, List, Tuple
 
 
 def _find_comfyui_dir(start_dir: str) -> str:
-    """Find the ComfyUI root directory by walking up from start_dir."""
+    """Find the ComfyUI root directory.
+
+    Resolution order:
+      1) FREEFUSE_COMFYUI_DIR / COMFYUI_DIR env var
+      2) Walk up from start_dir
+      3) Look for sibling/child ComfyUI folders while walking up
+    """
+    env_candidates = [
+        os.environ.get("FREEFUSE_COMFYUI_DIR"),
+        os.environ.get("COMFYUI_DIR"),
+    ]
+    for cand in env_candidates:
+        if not cand:
+            continue
+        cand = os.path.abspath(os.path.expanduser(cand))
+        if os.path.isdir(os.path.join(cand, "comfy")) and os.path.isfile(os.path.join(cand, "main.py")):
+            return cand
+
     cur = os.path.abspath(start_dir)
-    for _ in range(10):
+    for _ in range(12):
         if os.path.isdir(os.path.join(cur, "comfy")) and os.path.isfile(os.path.join(cur, "main.py")):
             return cur
-        sibling_comfyui = os.path.join(cur, "ComfyUI")
-        if os.path.isdir(sibling_comfyui) and os.path.isdir(os.path.join(sibling_comfyui, "comfy")):
-            return sibling_comfyui
+
+        for folder in ("ComfyUI", "comfyui"):
+            sibling = os.path.join(cur, folder)
+            if os.path.isdir(sibling) and os.path.isdir(os.path.join(sibling, "comfy")) and os.path.isfile(os.path.join(sibling, "main.py")):
+                return sibling
+
         parent = os.path.dirname(cur)
         if parent == cur:
             break
         cur = parent
-    raise FileNotFoundError("Could not locate ComfyUI directory")
+
+    raise FileNotFoundError(
+        "Could not locate ComfyUI directory. Set FREEFUSE_COMFYUI_DIR (or COMFYUI_DIR) "
+        "to your ComfyUI root, e.g. FREEFUSE_COMFYUI_DIR=C:/ComfyUI"
+    )
 
 
 # Setup paths
@@ -1060,8 +1084,63 @@ def load_zimage_models():
 
 
 def load_hidream_i1_models():
-    """Load HiDream i1 models via Z-Image-compatible path."""
-    model, clip, vae, _ = load_zimage_models()
+    """Load HiDream i1 models with 4-encoder preference (ComfyUI native)."""
+    print("\n[Loading HiDream i1 Models]")
+
+    unet_name = None
+    for name in folder_paths.get_filename_list("diffusion_models"):
+        ln = name.lower()
+        if "hidream" in ln:
+            unet_name = name
+            break
+    if not unet_name:
+        # Fallback for legacy setups where HiDream is not available yet.
+        print("  ⚠️ HiDream UNET not found, falling back to Z-Image-compatible loader")
+        model, clip, vae, _ = load_zimage_models()
+        return model, clip, vae, "hidream_i1"
+
+    from nodes import UNETLoader, VAELoader
+    model, = UNETLoader().load_unet(unet_name, "default")
+    print(f"  ✅ UNET loaded: {unet_name}")
+
+    text_encoders = folder_paths.get_filename_list("text_encoders")
+
+    def _pick(patterns):
+        for pat in patterns:
+            for n in text_encoders:
+                if pat in n.lower():
+                    return n
+        return None
+
+    clip_l = _pick(["clip_l", "long_clip_l", "clip-l"])
+    clip_g = _pick(["clip_g", "long_clip_g", "clip-g"])
+    t5xxl = _pick(["t5xxl", "t5", "umt5"])
+    llama = _pick(["llama", "llama3", "3.1", "instruct"])
+
+    clip = None
+    try:
+        from comfy_extras.nodes_hidream import QuadrupleCLIPLoader
+        if all([clip_l, clip_g, t5xxl, llama]):
+            clip = QuadrupleCLIPLoader.execute(clip_l, clip_g, t5xxl, llama).clip
+            print(f"  ✅ Quadruple CLIP loaded: {clip_l}, {clip_g}, {t5xxl}, {llama}")
+    except Exception as e:
+        print(f"  ⚠️ QuadrupleCLIPLoader unavailable/failed: {e}")
+
+    if clip is None:
+        print("  ⚠️ Falling back to Z-Image-compatible CLIP loader path")
+        model_z, clip_z, vae_z, _ = load_zimage_models()
+        return model_z if model is None else model, clip_z, vae_z, "hidream_i1"
+
+    vae_name = None
+    for name in folder_paths.get_filename_list("vae"):
+        if "ae" in name.lower() or "hidream" in name.lower() or "sdxl" in name.lower():
+            vae_name = name
+            break
+    if not vae_name:
+        raise FileNotFoundError("No VAE found for HiDream")
+    vae, = VAELoader().load_vae(vae_name)
+    print(f"  ✅ VAE loaded: {vae_name}")
+
     return model, clip, vae, "hidream_i1"
 
 
