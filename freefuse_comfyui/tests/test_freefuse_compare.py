@@ -500,8 +500,60 @@ def load_sdxl_models():
 
 
 def load_hidream_i1_models():
-    """Load HiDream i1 models via Z-Image-compatible path."""
-    model, clip, vae = load_zimage_models()
+    """Load HiDream i1 models with 4-encoder preference (ComfyUI native)."""
+    print("\n[Loading HiDream i1 Models]")
+
+    unet_name = None
+    for name in folder_paths.get_filename_list("diffusion_models"):
+        if "hidream" in name.lower():
+            unet_name = name
+            break
+
+    if not unet_name:
+        print("  ⚠️ HiDream UNET not found, falling back to Z-Image-compatible loader")
+        return load_zimage_models()
+
+    from nodes import UNETLoader, VAELoader
+    model, = UNETLoader().load_unet(unet_name, "default")
+    print(f"  ✅ UNET loaded: {unet_name}")
+
+    text_encoders = folder_paths.get_filename_list("text_encoders")
+
+    def _pick(patterns):
+        for pat in patterns:
+            for n in text_encoders:
+                if pat in n.lower():
+                    return n
+        return None
+
+    clip_l = _pick(["clip_l", "long_clip_l", "clip-l"])
+    clip_g = _pick(["clip_g", "long_clip_g", "clip-g"])
+    t5xxl = _pick(["t5xxl", "t5", "umt5"])
+    llama = _pick(["llama", "llama3", "3.1", "instruct"])
+
+    clip = None
+    try:
+        from comfy_extras.nodes_hidream import QuadrupleCLIPLoader
+        if all([clip_l, clip_g, t5xxl, llama]):
+            clip = QuadrupleCLIPLoader.execute(clip_l, clip_g, t5xxl, llama).clip
+            print(f"  ✅ Quadruple CLIP loaded: {clip_l}, {clip_g}, {t5xxl}, {llama}")
+    except Exception as e:
+        print(f"  ⚠️ QuadrupleCLIPLoader unavailable/failed: {e}")
+
+    if clip is None:
+        print("  ⚠️ Falling back to Z-Image-compatible CLIP loader path")
+        _, clip, _ = load_zimage_models()
+
+    vae_name = None
+    for name in folder_paths.get_filename_list("vae"):
+        if "ae" in name.lower() or "hidream" in name.lower() or "sdxl" in name.lower():
+            vae_name = name
+            break
+    if not vae_name:
+        raise FileNotFoundError("No VAE found for HiDream")
+    vae, = VAELoader().load_vae(vae_name)
+    print(f"  ✅ VAE loaded: {vae_name}")
+
     return model, clip, vae
 
 

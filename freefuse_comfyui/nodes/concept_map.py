@@ -234,7 +234,7 @@ class FreeFuseTokenPositions:
         
         # For Z-Image (Lumina2), pass system prompt so token positions
         # align with the conditioning produced by CLIPTextEncodeLumina2
-        system_prompt = LUMINA2_SYSTEM_PROMPT if model_type == 'z_image' else None
+        system_prompt = LUMINA2_SYSTEM_PROMPT if model_type in ('z_image', 'hidream_i1') else None
         
         # Compute token positions for each concept
         token_pos_maps = find_concept_positions(
@@ -372,7 +372,7 @@ class FreeFuseConceptMapSimple:
         
         # For Z-Image (Lumina2), pass system prompt so token positions
         # align with the conditioning produced by CLIPTextEncodeLumina2
-        system_prompt = LUMINA2_SYSTEM_PROMPT if model_type == 'z_image' else None
+        system_prompt = LUMINA2_SYSTEM_PROMPT if model_type in ('z_image', 'hidream_i1') else None
         
         # Compute token positions
         token_pos_maps = find_concept_positions(
