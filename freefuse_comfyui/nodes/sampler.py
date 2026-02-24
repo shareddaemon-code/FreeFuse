@@ -459,8 +459,7 @@ for Phase 2 generation with the same seed and steps."""
                 anisotropy=anisotropy,
             )
         else:
-            # Fallback: create uniform masks
-            print("[FreeFuse] Warning: No similarity maps, using uniform masks")
+            print("[FreeFuse] Warning: No similarity maps collected. Verify HiDream workflow uses CLIPTextEncodeHiDream and that collect_block points to a valid double_stream_blocks index.")
             masks = {}
             for name in concepts.keys():
                 masks[name] = torch.ones(latent_h, latent_w, device=latent_image.device)
@@ -612,6 +611,7 @@ for Phase 2 generation with the same seed and steps."""
         print(f"[FreeFuse] Processed {len(result)} similarity maps to spatial format")
         return result
     
+
     def _create_preview(self, masks, width, height):
         """Create color-coded mask preview."""
         colors = [

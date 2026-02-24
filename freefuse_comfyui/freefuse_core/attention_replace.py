@@ -1714,6 +1714,123 @@ def compute_z_image_similarity_maps(
     return concept_sim_maps
 
 
+
+class FreeFuseHiDreamAttnProcessorReplace:
+    """Collect similarity maps from HiDream double-stream attention blocks."""
+
+    def __init__(self, state: FreeFuseState, block, block_index: int):
+        self.state = state
+        self.block = block
+        self.block_index = block_index
+        self.attn = block.attn1
+
+    def install(self):
+        self.attn.processor = self
+        logging.info(
+            f"[FreeFuse] Installed HiDream processor replace on double_stream_blocks.{self.block_index}"
+        )
+
+    def __call__(
+        self,
+        attn,
+        image_tokens: torch.FloatTensor,
+        image_tokens_masks: Optional[torch.FloatTensor] = None,
+        text_tokens: Optional[torch.FloatTensor] = None,
+        rope: torch.FloatTensor = None,
+        transformer_options={},
+        *args,
+        **kwargs,
+    ):
+        dtype = image_tokens.dtype
+        batch_size = image_tokens.shape[0]
+
+        query_i = attn.q_rms_norm(attn.to_q(image_tokens)).to(dtype=dtype)
+        key_i = attn.k_rms_norm(attn.to_k(image_tokens)).to(dtype=dtype)
+        value_i = attn.to_v(image_tokens)
+
+        inner_dim = key_i.shape[-1]
+        head_dim = inner_dim // attn.heads
+
+        query_i = query_i.view(batch_size, -1, attn.heads, head_dim)
+        key_i = key_i.view(batch_size, -1, attn.heads, head_dim)
+        value_i = value_i.view(batch_size, -1, attn.heads, head_dim)
+
+        if image_tokens_masks is not None:
+            key_i = key_i * image_tokens_masks.view(batch_size, -1, 1, 1)
+
+        num_image_tokens = query_i.shape[1]
+        num_text_tokens = 0
+
+        if not attn.single and text_tokens is not None:
+            query_t = attn.q_rms_norm_t(attn.to_q_t(text_tokens)).to(dtype=dtype)
+            key_t = attn.k_rms_norm_t(attn.to_k_t(text_tokens)).to(dtype=dtype)
+            value_t = attn.to_v_t(text_tokens)
+
+            query_t = query_t.view(batch_size, -1, attn.heads, head_dim)
+            key_t = key_t.view(batch_size, -1, attn.heads, head_dim)
+            value_t = value_t.view(batch_size, -1, attn.heads, head_dim)
+            num_text_tokens = query_t.shape[1]
+
+            query = torch.cat([query_i, query_t], dim=1)
+            key = torch.cat([key_i, key_t], dim=1)
+            value = torch.cat([value_i, value_t], dim=1)
+        else:
+            query = query_i
+            key = key_i
+            value = value_i
+
+        if rope is not None:
+            if query.shape[-1] == rope.shape[-3] * 2:
+                query, key = apply_rope(query, key, rope)
+            else:
+                query_1, query_2 = query.chunk(2, dim=-1)
+                key_1, key_2 = key.chunk(2, dim=-1)
+                query_1, key_1 = apply_rope(query_1, key_1, rope)
+                query = torch.cat([query_1, query_2], dim=-1)
+                key = torch.cat([key_1, key_2], dim=-1)
+
+        from comfy.ldm.hidream.model import attention
+        hidden_states = attention(query, key, value, transformer_options=transformer_options)
+
+        if not attn.single and text_tokens is not None:
+            hidden_states_i, hidden_states_t = torch.split(hidden_states, [num_image_tokens, num_text_tokens], dim=1)
+            hidden_states_i = attn.to_out(hidden_states_i)
+            hidden_states_t = attn.to_out_t(hidden_states_t)
+        else:
+            hidden_states_i = attn.to_out(hidden_states)
+            hidden_states_t = None
+
+        current_step = transformer_options.get("sigmas_index", self.state.current_step) if isinstance(transformer_options, dict) else self.state.current_step
+        if (
+            self.state.token_pos_maps
+            and not attn.single
+            and self.state.is_collect_step(current_step, self.block_index)
+            and num_text_tokens > 0
+        ):
+            try:
+                sim_maps = compute_z_image_similarity_maps_with_qkv(
+                    img_q=query[:, :num_image_tokens, :, :],
+                    txt_k=key[:, num_image_tokens:, :, :],
+                    img_attn_out=hidden_states_i,
+                    cap_len=num_text_tokens,
+                    img_len=num_image_tokens,
+                    token_pos_maps=self.state.token_pos_maps,
+                    top_k_ratio=self.state.top_k_ratio,
+                    temperature=self.state.temperature,
+                    n_heads=attn.heads,
+                )
+                self.state.similarity_maps.update(sim_maps)
+                logging.info(
+                    f"[FreeFuse] Collected HiDream similarity maps at block {self.block_index}, step {current_step}: {list(sim_maps.keys())}"
+                )
+            except Exception as e:
+                logging.warning(f"[FreeFuse] HiDream similarity extraction failed: {e}")
+
+        if hidden_states_t is None:
+            return hidden_states_i
+        return hidden_states_i, hidden_states_t
+
+
 def apply_freefuse_replace_patches(
     model,
     state: FreeFuseState,
@@ -1749,7 +1866,7 @@ def apply_freefuse_replace_patches(
     
     logging.info(f"[FreeFuse] Applying AGGRESSIVE replace patches for {model_type} model")
     
-    if model_type in ("z_image", "hidream_i1"):
+    if model_type == "z_image":
         diffusion_model = model.model.diffusion_model
 
         block_index = state.collect_block
@@ -1757,16 +1874,38 @@ def apply_freefuse_replace_patches(
             block = diffusion_model.layers[block_index]
             replacer = FreeFuseZImageBlockReplace(state, block=block, block_index=block_index)
             replacer.install(model)
-            logging.info(f"[FreeFuse] Set QKV-based block replace for Z-Image-compatible layer {block_index}")
+            logging.info(f"[FreeFuse] Set QKV-based block replace for Z-Image layer {block_index}")
             logging.info(f"[FreeFuse] Block type: {type(block).__name__}")
         else:
             model_name = diffusion_model.__class__.__name__
             logging.error(
-                "[FreeFuse] HiDream/Z-Image patch route expects diffusion_model.layers; "
-                f"got {model_name}. Please use the Z-Image/Lumina-style ComfyUI model "
-                "path or extend FreeFuse with a HiDream-native block replace adapter."
+                "[FreeFuse] Z-Image patch route expects diffusion_model.layers; "
+                f"got {model_name}."
             )
-    
+
+    elif model_type == "hidream_i1":
+        diffusion_model = model.model.diffusion_model
+        block_index = state.collect_block
+        double_blocks = getattr(diffusion_model, "double_stream_blocks", None)
+        if double_blocks is not None and len(double_blocks) > 0:
+            max_idx = len(double_blocks) - 1
+            if block_index > max_idx:
+                logging.warning(
+                    f"[FreeFuse] collect_block={block_index} out of range for "
+                    f"{len(double_blocks)} HiDream double_stream_blocks; clamping to {max_idx}."
+                )
+                block_index = max_idx
+                state.collect_block = block_index
+            block = double_blocks[block_index].block
+            replacer = FreeFuseHiDreamAttnProcessorReplace(state, block=block, block_index=block_index)
+            replacer.install()
+        else:
+            model_name = diffusion_model.__class__.__name__
+            logging.error(
+                "[FreeFuse] HiDream patch route expects diffusion_model.double_stream_blocks; "
+                f"got {model_name}."
+            )
+
     elif model_type == "flux":
         # Get the actual diffusion model
         diffusion_model = model.model.diffusion_model
