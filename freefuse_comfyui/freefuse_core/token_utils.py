@@ -83,6 +83,9 @@ def _normalize_model_type(model_type: Optional[str]) -> Optional[str]:
         "z-image": "z_image",
         "lumina2": "z_image",
         "nextdit": "z_image",
+        "hidream": "hidream_i1",
+        "hidream-i1": "hidream_i1",
+        "hidream_i1": "hidream_i1",
         "flux1": "flux",
         "flux2.klein": "flux2",
         "flux2_klein": "flux2",
@@ -115,6 +118,8 @@ def detect_model_type_from_model(model) -> str:
         return "unknown"
 
     model_cls = core_model.__class__.__name__.lower()
+    if "hidream" in model_cls:
+        return "hidream_i1"
     if "nextdit" in model_cls or "lumina" in model_cls:
         return "z_image"
     if "flux2" in model_cls:
@@ -126,6 +131,8 @@ def detect_model_type_from_model(model) -> str:
     dm = getattr(core_model, "diffusion_model", None)
     if dm is not None:
         dm_cls = dm.__class__.__name__.lower()
+        if "hidream" in dm_cls:
+            return "hidream_i1"
         if "nextdit" in dm_cls or "lumina" in dm_cls:
             return "z_image"
         if "flux2" in dm_cls:
@@ -147,8 +154,10 @@ def detect_model_type_from_model(model) -> str:
             return "flux2"
         if image_model == "flux":
             return "flux"
-        if image_model == "lumina2":
+        if image_model in {"lumina2", "z_image"}:
             return "z_image"
+        if image_model in {"hidream", "hidream_i1"}:
+            return "hidream_i1"
 
     if has_flux_block_layout:
         return "flux"
@@ -166,7 +175,7 @@ def detect_model_type(clip=None, model=None, model_type_hint: Optional[str] = No
         model_type_hint: Explicit override or hint from workflow data
         
     Returns:
-        'flux', 'flux2', 'sdxl', 'z_image', 'qwen3', 'sd1', or 'unknown'
+        'flux', 'flux2', 'sdxl', 'z_image', 'hidream_i1', 'qwen3', 'sd1', or 'unknown'
     """
     normalized_hint = _normalize_model_type(model_type_hint)
     if normalized_hint is not None:
@@ -181,6 +190,8 @@ def detect_model_type(clip=None, model=None, model_type_hint: Optional[str] = No
 
     cond_stage_model = getattr(clip, "cond_stage_model", None)
     cond_stage_name = cond_stage_model.__class__.__name__.lower() if cond_stage_model is not None else ""
+    if "hidream" in cond_stage_name:
+        return "hidream_i1"
     if "nextdit" in cond_stage_name or "zimage" in cond_stage_name or "lumina" in cond_stage_name:
         return "z_image"
     if "flux2" in cond_stage_name:
@@ -271,13 +282,27 @@ def _resolve_qwen3_tokenizer(tokenizer):
     return None
 
 
+def _resolve_hidream_tokenizer(tokenizer):
+    """Resolve tokenizer branch for HiDream multi-encoder CLIP wrappers.
+
+    HiDream tokenizers can expose multiple branches (clip_l/clip_g/t5xxl/llama).
+    We anchor concept position matching on CLIP-L first for stable phrase lookup.
+    """
+    for key in ("clip_l", "l"):
+        if hasattr(tokenizer, key):
+            resolved = _extract_nested_tokenizer(getattr(tokenizer, key))
+            if resolved is not None:
+                return resolved
+    return None
+
+
 def get_tokenizer_for_model(clip, model_type: str = None):
     """
     Get the appropriate tokenizer object from CLIP.
     
     Args:
         clip: ComfyUI CLIP object
-        model_type: Optional override ('flux', 'flux2', 'sdxl', 'sd1', 'z_image', 'qwen3')
+        model_type: Optional override ('flux', 'flux2', 'sdxl', 'sd1', 'z_image', 'hidream_i1', 'qwen3')
         
     Returns:
         The underlying tokenizer object
@@ -290,6 +315,11 @@ def get_tokenizer_for_model(clip, model_type: str = None):
     tokenizer = getattr(clip, "tokenizer", None)
     if tokenizer is None:
         raise ValueError("Could not find clip.tokenizer on CLIP object.")
+
+    if model_type == "hidream_i1":
+        resolved = _resolve_hidream_tokenizer(tokenizer)
+        if resolved is not None:
+            return resolved
 
     if model_type in ("z_image", "flux2", "qwen3"):
         resolved = _resolve_qwen3_tokenizer(tokenizer)
@@ -804,7 +834,7 @@ def find_concept_positions(
                  Example: {'lora_a': 'a woman with red hair', 'lora_b': 'a man in suit'}
         filter_meaningless: Whether to filter stopwords/punctuation tokens
         filter_single_char: Whether to filter single-character tokens
-        model_type: Optional override ('flux', 'flux2', 'sdxl', 'sd1', 'z_image', 'qwen3')
+        model_type: Optional override ('flux', 'flux2', 'sdxl', 'sd1', 'z_image', 'hidream_i1', 'qwen3')
         system_prompt: System prompt for Z-Image/Lumina2 alignment (see
                        find_concept_positions_qwen3 for details).
         
@@ -829,7 +859,7 @@ def find_concept_positions(
     
     tokenizer = get_tokenizer_for_model(clip, model_type)
     
-    if model_type in ('z_image', 'flux2', 'qwen3'):
+    if model_type in ('z_image', 'hidream_i1', 'flux2', 'qwen3'):
         qwen_template = KLEIN_NO_THINK_TEMPLATE if model_type == "flux2" else None
         return find_concept_positions_qwen3(
             clip, tokenizer, prompts, concepts,
@@ -853,7 +883,7 @@ def find_concept_positions(
     else:
         raise ValueError(
             f"Unsupported model type: {model_type}. "
-            "Use 'flux', 'flux2', 'sdxl', 'z_image', 'qwen3', or 'sd1'."
+            "Use 'flux', 'flux2', 'sdxl', 'z_image', 'hidream_i1', 'qwen3', or 'sd1'."
         )
 
 
@@ -919,7 +949,7 @@ def find_eos_position_qwen3(
     else:
         model_type = _normalize_model_type(model_type) or model_type
 
-    if model_type not in {"flux2", "qwen3"}:
+    if model_type not in {"flux2", "qwen3", "hidream_i1"}:
         return -1
 
     tokenizer = get_tokenizer_for_model(clip, model_type)

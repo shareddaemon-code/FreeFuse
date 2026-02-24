@@ -19,18 +19,43 @@ from typing import Dict, Tuple, List, Optional
 
 
 def _find_comfyui_dir(start_dir: str) -> str:
+    """Find the ComfyUI root directory.
+
+    Resolution order:
+      1) FREEFUSE_COMFYUI_DIR / COMFYUI_DIR env var
+      2) Walk up from start_dir
+      3) Look for sibling/child ComfyUI folders while walking up
+    """
+    env_candidates = [
+        os.environ.get("FREEFUSE_COMFYUI_DIR"),
+        os.environ.get("COMFYUI_DIR"),
+    ]
+    for cand in env_candidates:
+        if not cand:
+            continue
+        cand = os.path.abspath(os.path.expanduser(cand))
+        if os.path.isdir(os.path.join(cand, "comfy")) and os.path.isfile(os.path.join(cand, "main.py")):
+            return cand
+
     cur = os.path.abspath(start_dir)
-    for _ in range(10):
+    for _ in range(12):
         if os.path.isdir(os.path.join(cur, "comfy")) and os.path.isfile(os.path.join(cur, "main.py")):
             return cur
-        sibling = os.path.join(cur, "ComfyUI")
-        if os.path.isdir(sibling) and os.path.isdir(os.path.join(sibling, "comfy")):
-            return sibling
+
+        for folder in ("ComfyUI", "comfyui"):
+            sibling = os.path.join(cur, folder)
+            if os.path.isdir(sibling) and os.path.isdir(os.path.join(sibling, "comfy")) and os.path.isfile(os.path.join(sibling, "main.py")):
+                return sibling
+
         parent = os.path.dirname(cur)
         if parent == cur:
             break
         cur = parent
-    raise FileNotFoundError("Could not locate ComfyUI directory")
+
+    raise FileNotFoundError(
+        "Could not locate ComfyUI directory. Set FREEFUSE_COMFYUI_DIR (or COMFYUI_DIR) "
+        "to your ComfyUI root, e.g. FREEFUSE_COMFYUI_DIR=C:/ComfyUI"
+    )
 
 
 # Path setup
@@ -60,7 +85,7 @@ import comfy.sample
 import comfy.model_management
 
 
-MODEL_ORDER = ["flux", "z_image", "klein9b", "klein4b", "sdxl"]
+MODEL_ORDER = ["flux", "klein4b", "klein9b", "sdxl", "z_image", "hidream_i1"]
 
 KLEIN_NO_THINK_TEMPLATE = "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n"
 KLEIN_GUIDANCE = None
@@ -103,6 +128,24 @@ MODEL_DEFAULTS = {
         "bias_blocks": "all",
         "bidirectional": True,
         "use_morphological_cleaning": True,
+    },
+    "hidream_i1": {
+        "steps": 12,
+        "cfg": 1.0,
+        "seed": 42,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "collect_step": 3,
+        "collect_block": 21,
+        "collect_region": "output_early ★ (recommended)",
+        "collect_tf_index": 3,
+        "top_k_ratio": 0.1,
+        "temperature": 0.0,
+        "bias_scale": 3.0,
+        "positive_bias_scale": 1.0,
+        "bias_blocks": "last_half",
+        "bidirectional": True,
+        "use_morphological_cleaning": False,
     },
     "klein4b": {
         "steps": 4,
@@ -456,9 +499,67 @@ def load_sdxl_models():
     return model, clip, vae
 
 
+def load_hidream_i1_models():
+    """Load HiDream i1 models with 4-encoder preference (ComfyUI native)."""
+    print("\n[Loading HiDream i1 Models]")
+
+    unet_name = None
+    for name in folder_paths.get_filename_list("diffusion_models"):
+        if "hidream" in name.lower():
+            unet_name = name
+            break
+
+    if not unet_name:
+        print("  ⚠️ HiDream UNET not found, falling back to Z-Image-compatible loader")
+        return load_zimage_models()
+
+    from nodes import UNETLoader, VAELoader
+    model, = UNETLoader().load_unet(unet_name, "default")
+    print(f"  ✅ UNET loaded: {unet_name}")
+
+    text_encoders = folder_paths.get_filename_list("text_encoders")
+
+    def _pick(patterns):
+        for pat in patterns:
+            for n in text_encoders:
+                if pat in n.lower():
+                    return n
+        return None
+
+    clip_l = _pick(["clip_l", "long_clip_l", "clip-l"])
+    clip_g = _pick(["clip_g", "long_clip_g", "clip-g"])
+    t5xxl = _pick(["t5xxl", "t5", "umt5"])
+    llama = _pick(["llama", "llama3", "3.1", "instruct"])
+
+    clip = None
+    try:
+        from comfy_extras.nodes_hidream import QuadrupleCLIPLoader
+        if all([clip_l, clip_g, t5xxl, llama]):
+            clip = QuadrupleCLIPLoader.execute(clip_l, clip_g, t5xxl, llama).clip
+            print(f"  ✅ Quadruple CLIP loaded: {clip_l}, {clip_g}, {t5xxl}, {llama}")
+    except Exception as e:
+        print(f"  ⚠️ QuadrupleCLIPLoader unavailable/failed: {e}")
+
+    if clip is None:
+        print("  ⚠️ Falling back to Z-Image-compatible CLIP loader path")
+        _, clip, _ = load_zimage_models()
+
+    vae_name = None
+    for name in folder_paths.get_filename_list("vae"):
+        if "ae" in name.lower() or "hidream" in name.lower() or "sdxl" in name.lower():
+            vae_name = name
+            break
+    if not vae_name:
+        raise FileNotFoundError("No VAE found for HiDream")
+    vae, = VAELoader().load_vae(vae_name)
+    print(f"  ✅ VAE loaded: {vae_name}")
+
+    return model, clip, vae
+
+
 def _find_loras_for_model(model_type: str) -> Tuple[str, str, str, str, float]:
     lora_list = folder_paths.get_filename_list("loras")
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         lora_a = next((l for l in lora_list if "jinx" in l.lower() and "zit" in l.lower()), None)
         lora_b = next((l for l in lora_list if "skeletor" in l.lower() and "zit" in l.lower()), None)
         adapter_a, adapter_b = "jinx", "skeleton"
@@ -507,7 +608,7 @@ def load_loras(model, clip, lora_a, lora_b, adapter_a, adapter_b, strength):
 
 
 def _default_prompt_config(model_type: str) -> Tuple[str, str, Dict[str, str], str, str, str]:
-    if model_type == "z_image":
+    if model_type in ("z_image", "hidream_i1"):
         prompt = (
             "A picture of two characters, a starry night scene with northern lights in background: "
             "The first character is Jinx_Arcane, a young woman with long blue hair in a loose braid "
@@ -818,6 +919,8 @@ def run_model_compare(model_type: str, width: int, height: int, out_dir: str) ->
         flux_variant = "flux2"
     elif model_type == "z_image":
         model, clip, vae = load_zimage_models()
+    elif model_type == "hidream_i1":
+        model, clip, vae = load_hidream_i1_models()
         flux_variant = None
     else:
         model, clip, vae = load_sdxl_models()
@@ -984,7 +1087,7 @@ def main():
     parser.add_argument(
         "--models",
         default="all",
-        help="Comma-separated: flux,klein4b,klein9b,z_image,sdxl or 'all'",
+        help="Comma-separated: flux,klein4b,klein9b,sdxl,z_image,hidream_i1 or 'all'",
     )
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--height", type=int, default=1024)

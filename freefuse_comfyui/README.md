@@ -9,6 +9,7 @@ FreeFuse for ComfyUI: multi-concept LoRA composition with spatial awareness.
 - [workflows/flux2_klein_9b_freefuse_complete.json](workflows/flux2_klein_9b_freefuse_complete.json)
 - [workflows/sdxl_freefuse_complete.json](workflows/sdxl_freefuse_complete.json)
 - [workflows/zimage_freefuse_complete.json](workflows/zimage_freefuse_complete.json)
+- [workflows/hidream_freefuse_complete.json](workflows/hidream_freefuse_complete.json)
 
 ## Installation
 
@@ -32,6 +33,9 @@ ln -s /path/to/FreeFuse/comfyui ComfyUI/custom_nodes
 > - Flux2.Klein 9B: flux-2-klein-9b-fp8.safetensors + qwen_3_8b_fp8mixed.safetensors + flux2-vae.safetensors
 > - SDXL: harry_potter_xl.safetensors, daiyu_lin_xl.safetensors
 > - Z-Image-Turbo: Jinx_Arcane_zit.safetensors, skeletor_zit.safetensors
+
+> - HiDream i1 (ComfyUI native): diffusion model + 4 text encoders (clip_l, clip_g, t5xxl, llama) + VAE.
+>   If the QuadrupleCLIPLoader path is unavailable in your ComfyUI build, FreeFuse test scripts fall back to Z-Image-compatible loading with a warning.
 > If you use the downloads above, rename the files or update the workflow nodes.
 
 **Prompt**
@@ -95,3 +99,19 @@ freefuse_flux_square_1024_output.png. It shows up in the Preview when the workfl
 ## License
 
 Apache 2.0
+
+
+## HiDream Troubleshooting (important)
+
+If your output looks like pure noise/static, check these exact points:
+
+1. **Do not use `CLIPTextEncode` with HiDream QuadrupleCLIPLoader output.**
+   Use `CLIPTextEncodeHiDream` for both positive and negative conditioning.
+2. **Do not use `ModelSamplingAuraFlow` for HiDream.**
+   Keep the UNET path direct: `UNETLoader -> FreeFuseLoRALoader ...`.
+3. For negative conditioning with `CLIPTextEncodeHiDream`, keep all 4 text fields empty (`""`) unless you intentionally want a structured negative prompt.
+4. Keep `cfg=1.0` and scheduler/sampler matching phase1+phase2 (`euler` + `simple` is a safe baseline).
+5. If HiDream hooks fail to produce similarity maps, FreeFuse now applies a deterministic stripe-partition fallback mask instead of full-ones masks to reduce subject merging.
+
+Minimal HiDream chain:
+`QuadrupleCLIPLoader -> CLIPTextEncodeHiDream (pos/neg) -> FreeFusePhase1Sampler -> FreeFuseMaskApplicator -> KSampler -> VAEDecode`.
