@@ -9,6 +9,7 @@ FreeFuse for ComfyUI: multi-concept LoRA composition with spatial awareness.
 - [workflows/flux2_klein_9b_freefuse_complete.json](workflows/flux2_klein_9b_freefuse_complete.json)
 - [workflows/sdxl_freefuse_complete.json](workflows/sdxl_freefuse_complete.json)
 - [workflows/zimage_freefuse_complete.json](workflows/zimage_freefuse_complete.json)
+- [workflows/hidream_freefuse_complete.json](workflows/hidream_freefuse_complete.json)
 
 ## Installation
 
@@ -32,6 +33,9 @@ ln -s /path/to/FreeFuse/comfyui ComfyUI/custom_nodes
 > - Flux2.Klein 9B: flux-2-klein-9b-fp8.safetensors + qwen_3_8b_fp8mixed.safetensors + flux2-vae.safetensors
 > - SDXL: harry_potter_xl.safetensors, daiyu_lin_xl.safetensors
 > - Z-Image-Turbo: Jinx_Arcane_zit.safetensors, skeletor_zit.safetensors
+
+> - HiDream i1 (ComfyUI native): diffusion model + 4 text encoders (clip_l, clip_g, t5xxl, llama) + VAE.
+>   If the QuadrupleCLIPLoader path is unavailable in your ComfyUI build, FreeFuse test scripts fall back to Z-Image-compatible loading with a warning.
 > If you use the downloads above, rename the files or update the workflow nodes.
 
 **Prompt**
