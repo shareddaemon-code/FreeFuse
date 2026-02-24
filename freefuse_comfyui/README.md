@@ -99,3 +99,18 @@ freefuse_flux_square_1024_output.png. It shows up in the Preview when the workfl
 ## License
 
 Apache 2.0
+
+
+## HiDream Troubleshooting (important)
+
+If your output looks like pure noise/static, check these exact points:
+
+1. **Do not use `CLIPTextEncode` with HiDream QuadrupleCLIPLoader output.**
+   Use `CLIPTextEncodeHiDream` for both positive and negative conditioning.
+2. **Do not use `ModelSamplingAuraFlow` for HiDream.**
+   Keep the UNET path direct: `UNETLoader -> FreeFuseLoRALoader ...`.
+3. For negative conditioning with `CLIPTextEncodeHiDream`, keep all 4 text fields empty (`""`) unless you intentionally want a structured negative prompt.
+4. Keep `cfg=1.0` and scheduler/sampler matching phase1+phase2 (`euler` + `simple` is a safe baseline).
+
+Minimal HiDream chain:
+`QuadrupleCLIPLoader -> CLIPTextEncodeHiDream (pos/neg) -> FreeFusePhase1Sampler -> FreeFuseMaskApplicator -> KSampler -> VAEDecode`.
