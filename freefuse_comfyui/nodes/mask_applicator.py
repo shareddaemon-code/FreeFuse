@@ -274,7 +274,7 @@ When enabled, constructs soft attention bias to guide cross-attention:
                   f"(bias_scale={bias_scale}, positive_scale={positive_bias_scale}, "
                   f"bidirectional={bidirectional}, blocks={bias_blocks})")
         
-        elif model_type == "z_image":
+        elif model_type in ("z_image", "hidream_i1"):
             # Z-Image uses unified [img, txt] sequence (image FIRST)
             img_seq_len = latent_h * latent_w
             

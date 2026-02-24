@@ -1,0 +1,310 @@
+{
+  "last_node_id": 16,
+  "last_link_id": 22,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "UNETLoader",
+      "pos": [-1120, -320],
+      "size": [320, 82],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "MODEL", "type": "MODEL", "links": [1], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "UNETLoader" },
+      "widgets_values": ["hidream_i1.safetensors", "default"]
+    },
+    {
+      "id": 2,
+      "type": "QuadrupleCLIPLoader",
+      "pos": [-1120, -140],
+      "size": [420, 170],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "CLIP", "type": "CLIP", "links": [2, 3, 15, 16], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "QuadrupleCLIPLoader" },
+      "widgets_values": [
+        "clip_l.safetensors",
+        "clip_g.safetensors",
+        "t5xxl_fp16.safetensors",
+        "llama3_8b_instruct_fp16.safetensors"
+      ]
+    },
+    {
+      "id": 3,
+      "type": "VAELoader",
+      "pos": [-1120, 80],
+      "size": [320, 58],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "VAE", "type": "VAE", "links": [19], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "VAELoader" },
+      "widgets_values": ["ae.safetensors"]
+    },
+    {
+      "id": 4,
+      "type": "FreeFuseLoRALoader",
+      "pos": [-760, -360],
+      "size": [370, 190],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 1 },
+        { "name": "clip", "type": "CLIP", "link": 2 }
+      ],
+      "outputs": [
+        { "name": "model", "type": "MODEL", "links": [4], "slot_index": 0 },
+        { "name": "clip", "type": "CLIP", "links": [5], "slot_index": 1 },
+        { "name": "freefuse_data", "type": "FREEFUSE_DATA", "links": [6], "slot_index": 2 }
+      ],
+      "properties": { "Node name for S&R": "FreeFuseLoRALoader" },
+      "widgets_values": ["hidream_subject_a.safetensors", "subject_a", 1.0, 1.0]
+    },
+    {
+      "id": 5,
+      "type": "FreeFuseLoRALoader",
+      "pos": [-360, -360],
+      "size": [370, 190],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 4 },
+        { "name": "clip", "type": "CLIP", "link": 5 },
+        { "name": "freefuse_data", "type": "FREEFUSE_DATA", "link": 6 }
+      ],
+      "outputs": [
+        { "name": "model", "type": "MODEL", "links": [7], "slot_index": 0 },
+        { "name": "clip", "type": "CLIP", "links": [8], "slot_index": 1 },
+        { "name": "freefuse_data", "type": "FREEFUSE_DATA", "links": [9], "slot_index": 2 }
+      ],
+      "properties": { "Node name for S&R": "FreeFuseLoRALoader" },
+      "widgets_values": ["hidream_subject_b.safetensors", "subject_b", 1.0, 1.0]
+    },
+    {
+      "id": 6,
+      "type": "CLIPTextEncodeHiDream",
+      "pos": [-760, -80],
+      "size": [460, 210],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [{ "name": "clip", "type": "CLIP", "link": 15 }],
+      "outputs": [{ "name": "CONDITIONING", "type": "CONDITIONING", "links": [10], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "CLIPTextEncodeHiDream" },
+      "widgets_values": [
+        "cinematic portrait of subject_a and subject_b in neon city",
+        "cinematic portrait of subject_a and subject_b in neon city",
+        "cinematic portrait of subject_a and subject_b in neon city",
+        "cinematic portrait of subject_a and subject_b in neon city"
+      ]
+    },
+    {
+      "id": 7,
+      "type": "CLIPTextEncodeHiDream",
+      "pos": [-260, -80],
+      "size": [460, 210],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [{ "name": "clip", "type": "CLIP", "link": 16 }],
+      "outputs": [{ "name": "CONDITIONING", "type": "CONDITIONING", "links": [11], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "CLIPTextEncodeHiDream" },
+      "widgets_values": ["", "", "", ""]
+    },
+    {
+      "id": 8,
+      "type": "FreeFuseConceptMapSimple",
+      "pos": [220, -330],
+      "size": [440, 360],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [{ "name": "clip", "type": "CLIP", "link": 8 }],
+      "outputs": [{ "name": "freefuse_data", "type": "FREEFUSE_DATA", "links": [12], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "FreeFuseConceptMapSimple" },
+      "widgets_values": [
+        "cinematic portrait of subject_a and subject_b in neon city",
+        true,
+        "neon city",
+        true,
+        true,
+        "subject_a",
+        "subject_a",
+        "subject_b",
+        "subject_b",
+        "",
+        "",
+        "",
+        ""
+      ]
+    },
+    {
+      "id": 9,
+      "type": "FreeFuseDataMerge",
+      "pos": [700, -310],
+      "size": [280, 82],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        { "name": "freefuse_data_a", "type": "FREEFUSE_DATA", "link": 9 },
+        { "name": "freefuse_data_b", "type": "FREEFUSE_DATA", "link": 12 }
+      ],
+      "outputs": [{ "name": "freefuse_data", "type": "FREEFUSE_DATA", "links": [13], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "FreeFuseDataMerge" },
+      "widgets_values": []
+    },
+    {
+      "id": 10,
+      "type": "EmptyLatentImage",
+      "pos": [220, 80],
+      "size": [280, 110],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [{ "name": "LATENT", "type": "LATENT", "links": [14], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "EmptyLatentImage" },
+      "widgets_values": [1024, 1024, 1]
+    },
+    {
+      "id": 11,
+      "type": "FreeFusePhase1Sampler",
+      "pos": [1020, -110],
+      "size": [420, 430],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 7 },
+        { "name": "conditioning", "type": "CONDITIONING", "link": 10 },
+        { "name": "neg_conditioning", "type": "CONDITIONING", "link": 11 },
+        { "name": "latent", "type": "LATENT", "link": 14 },
+        { "name": "freefuse_data", "type": "FREEFUSE_DATA", "link": 13 }
+      ],
+      "outputs": [
+        { "name": "model", "type": "MODEL", "links": [17], "slot_index": 0 },
+        { "name": "masks", "type": "MASKS", "links": [18], "slot_index": 1 },
+        { "name": "preview", "type": "IMAGE", "links": [], "slot_index": 2 }
+      ],
+      "properties": { "Node name for S&R": "FreeFusePhase1Sampler" },
+      "widgets_values": [42, 12, 3, 1.0, "euler", "simple", 21, "output_early ★ (recommended)", 3, 0.0, 0.1, true, 0.95, false, 15, 0.01, 0.0, 0.0]
+    },
+    {
+      "id": 12,
+      "type": "FreeFuseMaskApplicator",
+      "pos": [1470, -140],
+      "size": [420, 280],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 17 },
+        { "name": "masks", "type": "MASKS", "link": 18 },
+        { "name": "freefuse_data", "type": "FREEFUSE_DATA", "link": 13 },
+        { "name": "latent", "type": "LATENT", "link": 14 }
+      ],
+      "outputs": [{ "name": "model", "type": "MODEL", "links": [20], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "FreeFuseMaskApplicator" },
+      "widgets_values": [true, true, 3.0, 1.0, true, true, "last_half"]
+    },
+    {
+      "id": 13,
+      "type": "KSampler",
+      "pos": [1920, -80],
+      "size": [320, 260],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        { "name": "model", "type": "MODEL", "link": 20 },
+        { "name": "positive", "type": "CONDITIONING", "link": 10 },
+        { "name": "negative", "type": "CONDITIONING", "link": 11 },
+        { "name": "latent_image", "type": "LATENT", "link": 14 }
+      ],
+      "outputs": [{ "name": "LATENT", "type": "LATENT", "links": [21], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "KSampler" },
+      "widgets_values": [42, "fixed", 12, 1.0, "euler", "simple", 1.0]
+    },
+    {
+      "id": 14,
+      "type": "VAEDecode",
+      "pos": [2270, -80],
+      "size": [290, 50],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        { "name": "samples", "type": "LATENT", "link": 21 },
+        { "name": "vae", "type": "VAE", "link": 19 }
+      ],
+      "outputs": [{ "name": "IMAGE", "type": "IMAGE", "links": [22], "slot_index": 0 }],
+      "properties": { "Node name for S&R": "VAEDecode" },
+      "widgets_values": []
+    },
+    {
+      "id": 15,
+      "type": "SaveImage",
+      "pos": [2600, -80],
+      "size": [300, 80],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [{ "name": "images", "type": "IMAGE", "link": 22 }],
+      "outputs": [],
+      "properties": { "Node name for S&R": "SaveImage" },
+      "widgets_values": ["FreeFuse/hidream_i1_output"]
+    },
+    {
+      "id": 16,
+      "type": "Note",
+      "pos": [-1120, 220],
+      "size": [760, 170],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": { "text": "HiDream workflow notes:\n1) Replace placeholder model/text encoder/LoRA filenames with your installed files.\n2) This uses QuadrupleCLIPLoader + CLIPTextEncodeHiDream (native HiDream path).\n3) If your ComfyUI build lacks QuadrupleCLIPLoader, use Z-Image workflow as fallback." },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [1, 1, 0, 4, 0, "MODEL"],
+    [2, 2, 0, 4, 1, "CLIP"],
+    [3, 2, 0, 6, 0, "CLIP"],
+    [4, 4, 0, 5, 0, "MODEL"],
+    [5, 4, 1, 5, 1, "CLIP"],
+    [6, 4, 2, 5, 2, "FREEFUSE_DATA"],
+    [7, 5, 0, 11, 0, "MODEL"],
+    [8, 5, 1, 8, 0, "CLIP"],
+    [9, 5, 2, 9, 0, "FREEFUSE_DATA"],
+    [10, 6, 0, 11, 1, "CONDITIONING"],
+    [11, 7, 0, 11, 2, "CONDITIONING"],
+    [12, 8, 0, 9, 1, "FREEFUSE_DATA"],
+    [13, 9, 0, 11, 4, "FREEFUSE_DATA"],
+    [14, 10, 0, 11, 3, "LATENT"],
+    [15, 2, 0, 6, 0, "CLIP"],
+    [16, 2, 0, 7, 0, "CLIP"],
+    [17, 11, 0, 12, 0, "MODEL"],
+    [18, 11, 1, 12, 1, "MASKS"],
+    [19, 3, 0, 14, 1, "VAE"],
+    [20, 12, 0, 13, 0, "MODEL"],
+    [21, 13, 0, 14, 0, "LATENT"],
+    [22, 14, 0, 15, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": { "scale": 0.75, "offset": [1540, 560] },
+    "frontendVersion": "1.18.8"
+  },
+  "version": 0.4
+}
